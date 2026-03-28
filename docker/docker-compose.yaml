@@ -69,6 +69,7 @@ services:
     volumes:
       - ${DEER_FLOW_CONFIG_PATH}:/app/backend/config.yaml:ro
       - ${DEER_FLOW_EXTENSIONS_CONFIG_PATH}:/app/backend/extensions_config.json:ro
+      - ../Aspose.Total.lic:/app/backend/Aspose.Total.lic:ro
       - ../skills:/app/skills:ro
       - ${DEER_FLOW_HOME}:/app/backend/.deer-flow
       # DooD: AioSandboxProvider starts sandbox containers via host Docker daemon
@@ -89,6 +90,8 @@ services:
     working_dir: /app
     environment:
       - CI=true
+      - MODELSCOPE_API_KEY=${MODELSCOPE_API_KEY:-}
+      - ASPOSE_LICENSE_PATH=${ASPOSE_LICENSE_PATH:-./Aspose.Total.lic}
       - DEER_FLOW_HOME=/app/backend/.deer-flow
       # DooD path/network translation
       - DEER_FLOW_HOST_BASE_DIR=${DEER_FLOW_HOME}
@@ -118,6 +121,7 @@ services:
       - ${DEER_FLOW_CONFIG_PATH}:/app/config.yaml:ro
       - ${DEER_FLOW_EXTENSIONS_CONFIG_PATH}:/app/extensions_config.json:ro
       - ${DEER_FLOW_HOME}:/app/backend/.deer-flow
+      - ../Aspose.Total.lic:/app/backend/Aspose.Total.lic:ro
       - ../skills:/app/skills:ro
       - ../backend/.langgraph_api:/app/backend/.langgraph_api
       # DooD: same as gateway
@@ -137,6 +141,8 @@ services:
           create_host_path: true
     environment:
       - CI=true
+      - MODELSCOPE_API_KEY=${MODELSCOPE_API_KEY:-}
+      - ASPOSE_LICENSE_PATH=${ASPOSE_LICENSE_PATH:-./Aspose.Total.lic}
       - DEER_FLOW_HOME=/app/backend/.deer-flow
       - DEER_FLOW_CONFIG_PATH=/app/config.yaml
       - DEER_FLOW_EXTENSIONS_CONFIG_PATH=/app/extensions_config.json

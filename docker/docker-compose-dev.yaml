@@ -176,6 +176,7 @@ services:
       - langgraph-venv:/app/backend/.venv
       - ../config.yaml:/app/config.yaml
       - ../extensions_config.json:/app/extensions_config.json
+      - ../Aspose.Total.lic:/app/backend/Aspose.Total.lic:ro
       - ../skills:/app/skills
       - ../logs:/app/logs
       # Mount uv cache for faster dependency installation
@@ -198,6 +199,8 @@ services:
     working_dir: /app
     environment:
       - CI=true
+      - MODELSCOPE_API_KEY=${MODELSCOPE_API_KEY:-}
+      - ASPOSE_LICENSE_PATH=${ASPOSE_LICENSE_PATH:-${DEER_FLOW_ROOT}/Aspose.Total.lic}
       - DEER_FLOW_HOST_BASE_DIR=${DEER_FLOW_ROOT}/backend/.deer-flow
       - DEER_FLOW_HOST_SKILLS_PATH=${DEER_FLOW_ROOT}/skills
       - DEER_FLOW_SANDBOX_HOST=host.docker.internal
