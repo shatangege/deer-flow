@@ -1,12 +1,15 @@
 {
   "mcpServers": {
-    "aspose": {
-      "enabled": true,
+    "formatter-paper": {
       "type": "http",
-      "command": "http://192.168.0.102:3000/mcp",
-      "env": {},
-      "description": "Aspose MCP server providing various document processing tools"
+      "url": "$FORMATTER_PAPER_MCP_URL",
+      "description": "Format thesis and paper DOCX files through the remote formatter-paper HTTP MCP service",
+      "enabled": true
     }
   },
-  "skills": {}
+  "skills": {
+    "paper-format-expert": {
+      "enabled": true
+    }
+  }
 }

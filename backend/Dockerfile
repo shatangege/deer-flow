@@ -19,6 +19,10 @@ ARG APT_MIRROR
 ARG NODESOURCE_BASE_URL=https://deb.nodesource.com
 ARG UV_DEFAULT_INDEX
 
+ENV UV_LINK_MODE=copy
+ENV DOTNET_ROOT=/app/custom_agents/formatter_paper/.dotnet
+ENV PATH="${DOTNET_ROOT}:${PATH}"
+
 # Point apt at a faster mirror (required for good speeds outside deb.debian.org edges).
 # Replaces all list/sources under /etc/apt (bookworm uses debian.sources; security uses security.debian.org).
 RUN if [ -n "${APT_MIRROR}" ]; then \
@@ -35,6 +39,13 @@ RUN apt-get update && apt-get install -y \
     build-essential \
     gnupg \
     ca-certificates \
+    libicu72 \
+    libfontconfig1 \
+    libfreetype6 \
+    libpng16-16 \
+    libjpeg62-turbo \
+    libharfbuzz0b \
+    libglib2.0-0 \
     && mkdir -p /etc/apt/keyrings \
     && curl -fsSL "${NODESOURCE_BASE_URL}/gpgkey/nodesource-repo.gpg.key" | gpg --dearmor -o /etc/apt/keyrings/nodesource.gpg \
     && echo "deb [signed-by=/etc/apt/keyrings/nodesource.gpg] ${NODESOURCE_BASE_URL}/node_${NODE_MAJOR}.x nodistro main" > /etc/apt/sources.list.d/nodesource.list \
@@ -52,12 +63,19 @@ COPY --from=uv-source /uv /uvx /usr/local/bin/
 # Set working directory
 WORKDIR /app
 
-# Copy frontend source code
+# Copy backend and formatter source code
 COPY backend ./backend
+COPY custom_agents ./custom_agents
+COPY custom_agents/formatter_paper/lib/linux-x64/ /app/custom_agents/formatter_paper/lib/
 
 # Install dependencies with cache mount (UV_DEFAULT_INDEX → Aliyun/TUNA PyPI mirror when set)
 RUN --mount=type=cache,target=/root/.cache/uv \
     sh -c "if [ -n \"${UV_DEFAULT_INDEX}\" ]; then export UV_DEFAULT_INDEX=\"${UV_DEFAULT_INDEX}\"; fi; cd backend && uv sync"
+
+# Preinstall formatter runtime support into the same interpreter environment used by Deer Flow/MCP.
+# Aspose DLLs and licenses can be either baked into the image or runtime-mounted via ASPOSE_LIBS.
+RUN mkdir -p /app/custom_agents/formatter_paper/.dotnet \
+    && sh -c "if [ -n \"${UV_DEFAULT_INDEX}\" ]; then export UV_DEFAULT_INDEX=\"${UV_DEFAULT_INDEX}\"; fi; cd /app/backend && uv pip install --python .venv/bin/python pythonnet"
 
 # Expose ports (gateway: 8001, langgraph: 2024)
 EXPOSE 8001 2024

@@ -4,6 +4,8 @@ import asyncio
 import atexit
 import concurrent.futures
 import logging
+import os
+import time
 from collections.abc import Callable
 from typing import Any
 
@@ -14,6 +16,7 @@ from deerflow.mcp.client import build_servers_config
 from deerflow.mcp.oauth import build_oauth_tool_interceptor, get_initial_oauth_headers
 
 logger = logging.getLogger(__name__)
+_DEFAULT_MCP_INIT_TIMEOUT_SECONDS = 20.0
 
 # Global thread pool for sync tool invocation in async environments
 _SYNC_TOOL_EXECUTOR = concurrent.futures.ThreadPoolExecutor(max_workers=10, thread_name_prefix="mcp-sync-tool")
@@ -79,6 +82,7 @@ async def get_mcp_tools() -> list[BaseTool]:
     try:
         # Create the multi-server MCP client
         logger.info(f"Initializing MCP client with {len(servers_config)} server(s)")
+        logger.info("MCP server config keys: %s", {name: servers_config[name].get("transport") for name in servers_config})
 
         # Inject initial OAuth headers for server connections (tool discovery/session init)
         initial_oauth_headers = await get_initial_oauth_headers(extensions_config)
@@ -96,10 +100,14 @@ async def get_mcp_tools() -> list[BaseTool]:
             tool_interceptors.append(oauth_interceptor)
 
         client = MultiServerMCPClient(servers_config, tool_interceptors=tool_interceptors, tool_name_prefix=True)
+        timeout_seconds = float(os.getenv("DEER_FLOW_MCP_INIT_TIMEOUT_SECONDS", str(_DEFAULT_MCP_INIT_TIMEOUT_SECONDS)))
+        logger.info("Fetching MCP tools with timeout %.1fs", timeout_seconds)
 
         # Get all tools from all servers
-        tools = await client.get_tools()
-        logger.info(f"Successfully loaded {len(tools)} tool(s) from MCP servers")
+        started_at = time.monotonic()
+        tools = await asyncio.wait_for(client.get_tools(), timeout=timeout_seconds)
+        elapsed = time.monotonic() - started_at
+        logger.info(f"Successfully loaded {len(tools)} tool(s) from MCP servers in {elapsed:.2f}s")
 
         # Patch tools to support sync invocation, as deerflow client streams synchronously
         for tool in tools:
@@ -108,6 +116,14 @@ async def get_mcp_tools() -> list[BaseTool]:
 
         return tools
 
+    except TimeoutError:
+        logger.error(
+            "Timed out while initializing MCP tools after %.1fs. "
+            "This usually means a configured MCP server process did not complete initialize/tools/list handshake.",
+            float(os.getenv("DEER_FLOW_MCP_INIT_TIMEOUT_SECONDS", str(_DEFAULT_MCP_INIT_TIMEOUT_SECONDS))),
+            exc_info=True,
+        )
+        return []
     except Exception as e:
         logger.error(f"Failed to load MCP tools: {e}", exc_info=True)
         return []

@@ -19,6 +19,8 @@ downloads/
 eggs/
 .eggs/
 lib/
+!custom_agents/formatter_paper/lib/
+!custom_agents/formatter_paper/lib/**
 lib64/
 parts/
 sdist/

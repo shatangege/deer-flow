@@ -22,6 +22,21 @@
 # Access: http://localhost:${PORT:-2026}
 
 services:
+  formatter-paper:
+    profiles:
+      - formatter-paper
+    image: ${FORMATTER_PAPER_IMAGE:-formatter-paper-mcp:windows-ltsc2022}
+    container_name: deer-flow-formatter-paper
+    environment:
+      - FORMATTER_PAPER_HTTP_HOST=0.0.0.0
+      - FORMATTER_PAPER_HTTP_PORT=8765
+      - FORMATTER_PAPER_HTTP_PATH=/mcp
+      - FORMATTER_PAPER_PUBLIC_BASE_URL=${FORMATTER_PAPER_PUBLIC_BASE_URL:-http://host.docker.internal:8765}
+    ports:
+      - "${FORMATTER_PAPER_PORT:-8765}:8765"
+    networks:
+      - deer-flow
+    restart: unless-stopped
   # ── Reverse Proxy ──────────────────────────────────────────────────────────
   nginx:
     image: nginx:alpine
@@ -75,6 +90,8 @@ services:
       - ${DEER_FLOW_CONFIG_PATH}:/app/backend/config.yaml:ro
       - ${DEER_FLOW_EXTENSIONS_CONFIG_PATH}:/app/backend/extensions_config.json:ro
       - ../Aspose.Total.lic:/app/backend/Aspose.Total.lic:ro
+      - ../custom_agents/formatter_paper/lib:/app/custom_agents/formatter_paper/lib:ro
+      - ../custom_agents/formatter_paper/.dotnet:/app/custom_agents/formatter_paper/.dotnet:ro
       - ../skills:/app/skills:ro
       - ${DEER_FLOW_HOME}:/app/backend/.deer-flow
       # DooD: AioSandboxProvider starts sandbox containers via host Docker daemon
@@ -96,6 +113,9 @@ services:
     environment:
       - CI=true
       - MODELSCOPE_API_KEY=${MODELSCOPE_API_KEY:-}
+      - FORMATTER_PAPER_MCP_URL=${FORMATTER_PAPER_MCP_URL:-http://host.docker.internal:8765/mcp}
+      - ASPOSE_LIBS=/app/custom_agents/formatter_paper/lib
+      - DOTNET_ROOT=/app/custom_agents/formatter_paper/.dotnet
       - ASPOSE_LICENSE_PATH=${ASPOSE_LICENSE_PATH:-./Aspose.Total.lic}
       - DEER_FLOW_HOME=/app/backend/.deer-flow
       - DEER_FLOW_CHANNELS_LANGGRAPH_URL=${DEER_FLOW_CHANNELS_LANGGRAPH_URL:-http://langgraph:2024}
@@ -133,6 +153,8 @@ services:
       - ${DEER_FLOW_EXTENSIONS_CONFIG_PATH}:/app/extensions_config.json:ro
       - ${DEER_FLOW_HOME}:/app/backend/.deer-flow
       - ../Aspose.Total.lic:/app/backend/Aspose.Total.lic:ro
+      - ../custom_agents/formatter_paper/lib:/app/custom_agents/formatter_paper/lib:ro
+      - ../custom_agents/formatter_paper/.dotnet:/app/custom_agents/formatter_paper/.dotnet:ro
       - ../skills:/app/skills:ro
       - ../backend/.langgraph_api:/app/backend/.langgraph_api
       # DooD: same as gateway
@@ -153,6 +175,9 @@ services:
     environment:
       - CI=true
       - MODELSCOPE_API_KEY=${MODELSCOPE_API_KEY:-}
+      - FORMATTER_PAPER_MCP_URL=${FORMATTER_PAPER_MCP_URL:-http://host.docker.internal:8765/mcp}
+      - ASPOSE_LIBS=/app/custom_agents/formatter_paper/lib
+      - DOTNET_ROOT=/app/custom_agents/formatter_paper/.dotnet
       - ASPOSE_LICENSE_PATH=${ASPOSE_LICENSE_PATH:-./Aspose.Total.lic}
       - DEER_FLOW_HOME=/app/backend/.deer-flow
       - DEER_FLOW_CONFIG_PATH=/app/config.yaml

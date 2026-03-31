@@ -7,6 +7,7 @@ from pathlib import Path
 VIRTUAL_PATH_PREFIX = "/mnt/user-data"
 
 _SAFE_THREAD_ID_RE = re.compile(r"^[A-Za-z0-9_\-]+$")
+_WINDOWS_DRIVE_PATH_RE = re.compile(r"^[A-Za-z]:[\\/]")
 
 
 class Paths:
@@ -37,7 +38,22 @@ class Paths:
     """
 
     def __init__(self, base_dir: str | Path | None = None) -> None:
-        self._base_dir = Path(base_dir).resolve() if base_dir is not None else None
+        if base_dir is None:
+            self._base_dir = None
+            return
+
+        # In DooD mode on Windows hosts, env vars like DEER_FLOW_HOST_BASE_DIR can
+        # contain Windows drive paths (e.g. "D:\workspace\deer-flow\backend\.deer-flow").
+        #
+        # This code runs inside a Linux container, where calling Path(...).resolve()
+        # will incorrectly treat those values as POSIX-relative paths and prefix them
+        # with the current working directory (e.g. "/app/backend/D:\..."), which
+        # then breaks Docker volume mount parsing ("too many colons").
+        base_dir_str = str(base_dir)
+        if _WINDOWS_DRIVE_PATH_RE.match(base_dir_str):
+            self._base_dir = Path(base_dir_str)
+        else:
+            self._base_dir = Path(base_dir).resolve()
 
     @property
     def host_base_dir(self) -> Path:
