@@ -23,15 +23,32 @@
 
 services:
   formatter-paper:
-    profiles:
-      - formatter-paper
-    image: ${FORMATTER_PAPER_IMAGE:-formatter-paper-mcp:windows-ltsc2022}
+    build:
+      context: ../
+      dockerfile: custom_agents/formatter_paper/Dockerfile
+      args:
+        APT_MIRROR: ${APT_MIRROR:-}
+        PYTHON_IMAGE: ${FORMATTER_PAPER_PYTHON_IMAGE:-python:3.12-slim-bookworm}
+        DOTNET_IMAGE: ${FORMATTER_PAPER_DOTNET_IMAGE:-mcr.microsoft.com/dotnet/runtime:8.0-bookworm-slim}
+    image: ${FORMATTER_PAPER_IMAGE:-formatter-paper-mcp:linux-dotnet8-python312}
     container_name: deer-flow-formatter-paper
+    volumes:
+      - ../custom_agents/formatter_paper/lib:/app/custom_agents/formatter_paper/lib:ro
+      - ../Aspose.Total.lic:/app/backend/Aspose.Total.lic:ro
+      - ../skills:/app/skills:ro
+      - ../skills:/mnt/skills:ro
+      - ../backend/.deer-flow:/app/backend/.deer-flow
+      - ../backend/.deer-flow/threads:/mnt/threads:rw
     environment:
+      - DEER_FLOW_HOME=/app/backend/.deer-flow
+      - THREADS_ROOT=/mnt/threads
+      - FORMATTER_PAPER_THREAD_ID=${FORMATTER_PAPER_THREAD_ID:-}
       - FORMATTER_PAPER_HTTP_HOST=0.0.0.0
       - FORMATTER_PAPER_HTTP_PORT=8765
       - FORMATTER_PAPER_HTTP_PATH=/mcp
-      - FORMATTER_PAPER_PUBLIC_BASE_URL=${FORMATTER_PAPER_PUBLIC_BASE_URL:-http://host.docker.internal:8765}
+      - FORMATTER_PAPER_PUBLIC_BASE_URL=${FORMATTER_PAPER_PUBLIC_BASE_URL:-http://formatter-paper:8765}
+      - ASPOSE_LIBS=/app/custom_agents/formatter_paper/lib
+      - ASPOSE_LICENSE_PATH=${ASPOSE_LICENSE_PATH:-/app/backend/Aspose.Total.lic}
     ports:
       - "${FORMATTER_PAPER_PORT:-8765}:8765"
     networks:
@@ -86,6 +103,8 @@ services:
         UV_IMAGE: ${UV_IMAGE:-ghcr.io/astral-sh/uv:0.7.20}
     container_name: deer-flow-gateway
     command: sh -c "cd backend && PYTHONPATH=. uv run uvicorn app.gateway.app:app --host 0.0.0.0 --port 8001 --workers 2"
+    depends_on:
+      - formatter-paper
     volumes:
       - ${DEER_FLOW_CONFIG_PATH}:/app/backend/config.yaml:ro
       - ${DEER_FLOW_EXTENSIONS_CONFIG_PATH}:/app/backend/extensions_config.json:ro
@@ -113,7 +132,7 @@ services:
     environment:
       - CI=true
       - MODELSCOPE_API_KEY=${MODELSCOPE_API_KEY:-}
-      - FORMATTER_PAPER_MCP_URL=${FORMATTER_PAPER_MCP_URL:-http://host.docker.internal:8765/mcp}
+      - FORMATTER_PAPER_MCP_URL=${FORMATTER_PAPER_MCP_URL:-http://formatter-paper:8765/mcp}
       - ASPOSE_LIBS=/app/custom_agents/formatter_paper/lib
       - DOTNET_ROOT=/app/custom_agents/formatter_paper/.dotnet
       - ASPOSE_LICENSE_PATH=${ASPOSE_LICENSE_PATH:-./Aspose.Total.lic}
@@ -148,6 +167,8 @@ services:
         UV_IMAGE: ${UV_IMAGE:-ghcr.io/astral-sh/uv:0.7.20}
     container_name: deer-flow-langgraph
     command: sh -c "cd /app/backend && uv run langgraph dev --no-browser --allow-blocking --no-reload --host 0.0.0.0 --port 2024"
+    depends_on:
+      - formatter-paper
     volumes:
       - ${DEER_FLOW_CONFIG_PATH}:/app/config.yaml:ro
       - ${DEER_FLOW_EXTENSIONS_CONFIG_PATH}:/app/extensions_config.json:ro
@@ -175,7 +196,7 @@ services:
     environment:
       - CI=true
       - MODELSCOPE_API_KEY=${MODELSCOPE_API_KEY:-}
-      - FORMATTER_PAPER_MCP_URL=${FORMATTER_PAPER_MCP_URL:-http://host.docker.internal:8765/mcp}
+      - FORMATTER_PAPER_MCP_URL=${FORMATTER_PAPER_MCP_URL:-http://formatter-paper:8765/mcp}
       - ASPOSE_LIBS=/app/custom_agents/formatter_paper/lib
       - DOTNET_ROOT=/app/custom_agents/formatter_paper/.dotnet
       - ASPOSE_LICENSE_PATH=${ASPOSE_LICENSE_PATH:-./Aspose.Total.lic}

@@ -66,7 +66,11 @@ WORKDIR /app
 # Copy backend and formatter source code
 COPY backend ./backend
 COPY custom_agents ./custom_agents
-COPY custom_agents/formatter_paper/lib/linux-x64/ /app/custom_agents/formatter_paper/lib/
+# Optional NuGet-style layout: native assets only under lib/linux-x64/ (not in git — add locally if needed)
+RUN if [ -d /app/custom_agents/formatter_paper/lib/linux-x64 ]; then \
+      cp -a /app/custom_agents/formatter_paper/lib/linux-x64/. /app/custom_agents/formatter_paper/lib/ && \
+      rm -rf /app/custom_agents/formatter_paper/lib/linux-x64; \
+    fi
 
 # Install dependencies with cache mount (UV_DEFAULT_INDEX → Aliyun/TUNA PyPI mirror when set)
 RUN --mount=type=cache,target=/root/.cache/uv \
