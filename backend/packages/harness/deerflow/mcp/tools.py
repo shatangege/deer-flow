@@ -14,6 +14,7 @@ from langchain_core.tools import BaseTool
 from deerflow.config.extensions_config import ExtensionsConfig
 from deerflow.mcp.client import build_servers_config
 from deerflow.mcp.oauth import build_oauth_tool_interceptor, get_initial_oauth_headers
+from deerflow.mcp.path_mapping import build_path_mapping_tool_interceptor
 
 logger = logging.getLogger(__name__)
 _DEFAULT_MCP_INIT_TIMEOUT_SECONDS = 20.0
@@ -95,6 +96,9 @@ async def get_mcp_tools() -> list[BaseTool]:
                 servers_config[server_name]["headers"] = existing_headers
 
         tool_interceptors = []
+        path_mapping_interceptor = build_path_mapping_tool_interceptor(extensions_config)
+        if path_mapping_interceptor is not None:
+            tool_interceptors.append(path_mapping_interceptor)
         oauth_interceptor = build_oauth_tool_interceptor(extensions_config)
         if oauth_interceptor is not None:
             tool_interceptors.append(oauth_interceptor)

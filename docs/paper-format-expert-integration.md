@@ -47,18 +47,18 @@ When Deer Flow runs in Docker, the `formatter-paper` MCP should execute as its o
 
 Make sure the formatter service has all of the following:
 
-- `pythonnet` installed in the Python environment that launches `formatter_mcp_server.py`
-- a usable Linux `.NET 8` runtime
-- Aspose runtime files available under `custom_agents/formatter_paper/lib/`
-- Linux native assets available under `custom_agents/formatter_paper/lib/`, especially `libSkiaSharp.so`
+- Python 3.12
+- `pythonnet` in the same Python environment that launches `formatter_mcp_server.py`
+- a usable Linux `.NET 8` runtime with `Microsoft.NETCore.App`
+- Aspose managed runtime files available under a managed assets directory
+- Linux native assets available under a separate native assets directory, especially `libSkiaSharp.so`
 
-Recommended one-time validation command on the formatter host:
+This integration keeps the **Python bridge** model:
 
-```bash
-uv run --project backend python custom_agents/formatter_paper/install.py
-```
-
-Use it to verify the formatter environment. Deer Flow runtime containers should not rely on local Aspose startup.
+- `formatter_mcp_server.py` starts the HTTP MCP service
+- `convert.py` / `formatter_runtime.py` call Aspose .NET DLLs through `pythonnet.load("coreclr", ...)`
+- the Windows sample tutorial is only a Python/.NET invocation reference; its `Microsoft.WindowsDesktop.App` and `libSkiaSharp.dll` assumptions must not be copied into Linux
+- on Linux, managed DLLs and native `.so` files are intentionally split so host mounts cannot overwrite the image-baked native assets
 
 For container deployment, build the dedicated Linux image:
 
@@ -74,6 +74,23 @@ FORMATTER_PAPER_MCP_URL=http://formatter-paper:8765/mcp
 
 The Deer Flow backend containers should not try to boot Aspose locally; they only need the formatter service URL.
 
+Minimum runtime validation inside the formatter container:
+
+```bash
+python --version
+dotnet --list-runtimes
+python -c "import pythonnet; print('pythonnet ok')"
+ls /opt/formatter-paper/native/libSkiaSharp.so
+ldd /opt/formatter-paper/native/libSkiaSharp.so
+```
+
+Expected:
+
+- Python is `3.12.x`
+- `.NET 8` includes `Microsoft.NETCore.App`
+- `pythonnet` imports cleanly
+- `libSkiaSharp.so` exists and `ldd` reports no `not found`
+
 ## Docker / Compose Recommendation
 
 Use a split strategy:
@@ -81,8 +98,8 @@ Use a split strategy:
 - run a dedicated formatter service with `formatter_mcp_server.py`
 - or run the dedicated Linux container built from `custom_agents/formatter_paper/Dockerfile`
 - point Deer Flow containers to it via `FORMATTER_PAPER_MCP_URL`
-- `/mnt/skills`, `/app/skills`, and **`THREADS_ROOT=/mnt/threads`** (host `backend/.deer-flow/threads`) are mounted on `formatter-paper`; use `/mnt/threads/<id>/user-data/...` or virtual `/mnt/user-data/...` with `FORMATTER_PAPER_THREAD_ID` set (see `formatter_mcp_server.py`)
-- pass either downloadable URLs or base64 payloads to the remote tools
+- `/mnt/skills`, `/app/skills`, and **`THREADS_ROOT=/mnt/threads`** (host `backend/.deer-flow/threads`) are mounted on `formatter-paper`; prefer concrete shared paths such as `/mnt/threads/<id>/user-data/uploads/...`, `/mnt/threads/<id>/user-data/workspace/...`, and `/mnt/threads/<id>/user-data/outputs/...` (see `formatter_mcp_server.py`)
+- prefer shared filesystem paths to the remote tools; use downloadable URLs only when shared mounts are unavailable, and reserve base64 for small fallback payloads
 - consume returned `output_download_url` and optional `report_download_url`
 
 This keeps Deer Flow unchanged while moving all Aspose runtime requirements out of the backend image and into a dedicated Linux formatter service.
@@ -98,7 +115,7 @@ This keeps Deer Flow unchanged while moving all Aspose runtime requirements out 
 | `backend/.deer-flow/threads` → `/mnt/threads` | bind mount (read-write) | **`THREADS_ROOT`** for app-side paths; optional `/mnt/user-data/...` mapping via `FORMATTER_PAPER_THREAD_ID` in formatter MCP |
 | `DEER_FLOW_HOME=/app/backend/.deer-flow` | env on `formatter-paper`; dev compose also sets on `gateway` / `langgraph` | Same logical data root as [`get_paths().base_dir`](../backend/packages/harness/deerflow/config/paths.py) when resolving `/mnt/user-data/...` in the backend |
 
-The **stdio** formatter MCP resolves virtual paths **inside the gateway process**. The **HTTP** formatter maps `/mnt/user-data/...` when **`THREADS_ROOT`** and **`FORMATTER_PAPER_THREAD_ID`** are set, or use concrete paths under **`/mnt/threads/<id>/user-data/...`**.
+The **stdio** formatter MCP resolves virtual paths inside the gateway process. The **HTTP** formatter should primarily use concrete shared paths under **`/mnt/threads/<id>/user-data/...`**. Virtual `/mnt/user-data/...` mapping remains available only as a compatibility fallback when **`THREADS_ROOT`** and **`FORMATTER_PAPER_THREAD_ID`** are set.
 
 To verify the formatter container after `docker compose ... up`, run [`docker/verify-formatter-paper-mounts.sh`](../docker/verify-formatter-paper-mounts.sh) from the `docker/` directory (see also [HTTP_MCP.md](../custom_agents/formatter_paper/HTTP_MCP.md)).
 

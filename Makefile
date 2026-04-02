@@ -16,7 +16,7 @@ help:
 	@echo "  make config-upgrade  - Merge new fields from config.example.yaml into config.yaml"
 	@echo "  make check           - Check if all required tools are installed"
 	@echo "  make install         - Install all dependencies (frontend + backend)"
-	@echo "  make setup-sandbox   - Pre-pull sandbox container image (recommended)"
+	@echo "  make setup-sandbox   - Pre-pull the sandbox container image (recommended)"
 	@echo "  make dev             - Start all services in development mode (with hot-reloading)"
 	@echo "  make dev-daemon      - Start all services in background (daemon mode)"
 	@echo "  make start           - Start all services in production mode (optimized, no hot-reloading)"
@@ -57,11 +57,11 @@ install:
 	@echo "  Optional: Pre-pull Sandbox Image"
 	@echo "=========================================="
 	@echo ""
-	@echo "If you plan to use Docker/Container-based sandbox, you can pre-pull the image:"
+	@echo "If you plan to use Docker/Container-based sandbox, you can prepare the image:"
 	@echo "  make setup-sandbox"
 	@echo ""
 
-# Pre-pull sandbox Docker image (optional but recommended)
+# Prepare sandbox Docker image (optional but recommended)
 setup-sandbox:
 	@echo "=========================================="
 	@echo "  Pre-pulling Sandbox Container Image"
@@ -75,10 +75,6 @@ setup-sandbox:
 		echo "Using configured image: $$IMAGE"; \
 	fi; \
 	echo ""; \
-	if command -v container >/dev/null 2>&1 && [ "$$(uname)" = "Darwin" ]; then \
-		echo "Detected Apple Container on macOS, pulling image..."; \
-		container pull "$$IMAGE" || echo "⚠ Apple Container pull failed, will try Docker"; \
-	fi; \
 	if command -v docker >/dev/null 2>&1; then \
 		echo "Pulling image using Docker..."; \
 		if docker pull "$$IMAGE"; then \

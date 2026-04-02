@@ -33,8 +33,11 @@ services:
     image: ${FORMATTER_PAPER_IMAGE:-formatter-paper-mcp:linux-dotnet8-python312}
     container_name: deer-flow-formatter-paper
     volumes:
-      - ../custom_agents/formatter_paper/lib:/app/custom_agents/formatter_paper/lib:ro
-      - ../Aspose.Total.lic:/app/backend/Aspose.Total.lic:ro
+      - ../custom_agents/formatter_paper/lib/Aspose.Words.dll:/opt/formatter-paper/managed/Aspose.Words.dll:ro
+      - ../custom_agents/formatter_paper/lib/SkiaSharp.dll:/opt/formatter-paper/managed/SkiaSharp.dll:ro
+      - ../custom_agents/formatter_paper/lib/System.Text.Encoding.CodePages.dll:/opt/formatter-paper/managed/System.Text.Encoding.CodePages.dll:ro
+      - ../custom_agents/formatter_paper/lib/runtimeconfig.json:/opt/formatter-paper/managed/runtimeconfig.json:ro
+      - ../Aspose.Total.lic:/opt/formatter-paper/license/Aspose.Total.NET.lic:ro
       - ../skills:/app/skills:ro
       - ../skills:/mnt/skills:ro
       - ../backend/.deer-flow:/app/backend/.deer-flow
@@ -47,8 +50,10 @@ services:
       - FORMATTER_PAPER_HTTP_PORT=8765
       - FORMATTER_PAPER_HTTP_PATH=/mcp
       - FORMATTER_PAPER_PUBLIC_BASE_URL=${FORMATTER_PAPER_PUBLIC_BASE_URL:-http://formatter-paper:8765}
-      - ASPOSE_LIBS=/app/custom_agents/formatter_paper/lib
-      - ASPOSE_LICENSE_PATH=${ASPOSE_LICENSE_PATH:-/app/backend/Aspose.Total.lic}
+      - ASPOSE_MANAGED_DIR=/opt/formatter-paper/managed
+      - ASPOSE_NATIVE_DIR=/opt/formatter-paper/native
+      - ASPOSE_LICENSE_PATH=/opt/formatter-paper/license/Aspose.Total.NET.lic
+      - ASPOSE_LIBS=/opt/formatter-paper/managed
     ports:
       - "${FORMATTER_PAPER_PORT:-8765}:8765"
     networks:
@@ -80,6 +85,7 @@ services:
         NODE_IMAGE: ${NODE_IMAGE:-node:22-alpine}
         PNPM_STORE_PATH: ${PNPM_STORE_PATH:-/root/.local/share/pnpm/store}
         NPM_REGISTRY: ${NPM_REGISTRY:-}
+        COREPACK_NPM_REGISTRY: ${COREPACK_NPM_REGISTRY:-}
     container_name: deer-flow-frontend
     environment:
       - BETTER_AUTH_SECRET=${BETTER_AUTH_SECRET}
@@ -135,7 +141,7 @@ services:
       - FORMATTER_PAPER_MCP_URL=${FORMATTER_PAPER_MCP_URL:-http://formatter-paper:8765/mcp}
       - ASPOSE_LIBS=/app/custom_agents/formatter_paper/lib
       - DOTNET_ROOT=/app/custom_agents/formatter_paper/.dotnet
-      - ASPOSE_LICENSE_PATH=${ASPOSE_LICENSE_PATH:-./Aspose.Total.lic}
+      - ASPOSE_LICENSE_PATH=/app/backend/Aspose.Total.lic
       - DEER_FLOW_HOME=/app/backend/.deer-flow
       - DEER_FLOW_CHANNELS_LANGGRAPH_URL=${DEER_FLOW_CHANNELS_LANGGRAPH_URL:-http://langgraph:2024}
       - DEER_FLOW_CHANNELS_GATEWAY_URL=${DEER_FLOW_CHANNELS_GATEWAY_URL:-http://gateway:8001}
@@ -199,7 +205,7 @@ services:
       - FORMATTER_PAPER_MCP_URL=${FORMATTER_PAPER_MCP_URL:-http://formatter-paper:8765/mcp}
       - ASPOSE_LIBS=/app/custom_agents/formatter_paper/lib
       - DOTNET_ROOT=/app/custom_agents/formatter_paper/.dotnet
-      - ASPOSE_LICENSE_PATH=${ASPOSE_LICENSE_PATH:-./Aspose.Total.lic}
+      - ASPOSE_LICENSE_PATH=/app/backend/Aspose.Total.lic
       - DEER_FLOW_HOME=/app/backend/.deer-flow
       - DEER_FLOW_CONFIG_PATH=/app/config.yaml
       - DEER_FLOW_EXTENSIONS_CONFIG_PATH=/app/extensions_config.json
@@ -231,7 +237,7 @@ services:
       - ~/.kube/config:/root/.kube/config:ro
     environment:
       - K8S_NAMESPACE=deer-flow
-      - SANDBOX_IMAGE=enterprise-public-cn-beijing.cr.volces.com/vefaas-public/all-in-one-sandbox:latest
+      - SANDBOX_IMAGE=deer-flow-subtask-sandbox:latest
       - SKILLS_HOST_PATH=${DEER_FLOW_REPO_ROOT}/skills
       - THREADS_HOST_PATH=${DEER_FLOW_HOME}/threads
       - KUBECONFIG_PATH=/root/.kube/config

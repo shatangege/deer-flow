@@ -42,6 +42,14 @@ class McpServerConfig(BaseModel):
     url: str | None = Field(default=None, description="URL of the MCP server (for sse or http type)")
     headers: dict[str, str] = Field(default_factory=dict, description="HTTP headers to send (for sse or http type)")
     oauth: McpOAuthConfig | None = Field(default=None, description="OAuth configuration (for sse or http type)")
+    path_mapping: str | None = Field(
+        default=None,
+        description="Optional argument path mapping strategy applied before MCP tool calls (e.g. 'virtual_to_physical')",
+    )
+    path_arg_names: list[str] = Field(
+        default_factory=list,
+        description="Optional allowlist of tool argument names that should be treated as file paths for path mapping",
+    )
     description: str = Field(default="", description="Human-readable description of what this MCP server provides")
     model_config = ConfigDict(extra="allow")
 

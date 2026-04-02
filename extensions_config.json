@@ -3,6 +3,24 @@
     "formatter-paper": {
       "type": "http",
       "url": "$FORMATTER_PAPER_MCP_URL",
+      "path_mapping": "virtual_to_physical",
+      "path_arg_names": [
+        "source_docx_path",
+        "template_docx_path",
+        "output_docx_path",
+        "report_json_path",
+        "docx_path",
+        "outline_json_path",
+        "structure_json_path",
+        "template_structure_json_path",
+        "template_style_json_path",
+        "template_interpret_json_path",
+        "source_outline_json_path",
+        "source_structure_json_path",
+        "formatted_docx_path",
+        "final_docx_path",
+        "review_json_path"
+      ],
       "description": "Format thesis and paper DOCX files through the remote formatter-paper HTTP MCP service",
       "enabled": true
     }

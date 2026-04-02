@@ -23,7 +23,7 @@ The **Sandbox Provisioner** is a FastAPI service that dynamically manages sandbo
 1. **Backend Request**: When the backend needs to execute code, it sends a `POST /api/sandboxes` request with a `sandbox_id` and `thread_id`.
 
 2. **Pod Creation**: The provisioner creates a dedicated Pod in the `deer-flow` namespace with:
-   - The sandbox container image (all-in-one-sandbox)
+   - The sandbox container image (`enterprise-public-cn-beijing.cr.volces.com/vefaas-public/all-in-one-sandbox:latest` by default)
    - HostPath volumes mounted for:
      - `/mnt/skills` → Read-only access to public skills
      - `/mnt/user-data` → Read-write access to thread-specific data
