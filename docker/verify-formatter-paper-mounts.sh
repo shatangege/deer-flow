@@ -26,19 +26,28 @@ run() {
 
 echo "=== formatter-paper mount checks (${PROJECT} / ${FILE}) ==="
 
-run "${COMPOSE} exec -T formatter-paper test -f /app/backend/Aspose.Total.lic"
+run "${COMPOSE} exec -T formatter-paper test -f /opt/formatter-paper/license/Aspose.Total.NET.lic"
 if [ "${FAILED}" -eq 0 ]; then
   echo "OK: Aspose license file present"
 else
-  echo "FAIL: Aspose license missing at /app/backend/Aspose.Total.lic"
+  echo "FAIL: Aspose license missing at /opt/formatter-paper/license/Aspose.Total.NET.lic"
 fi
 
 SKIA_FAIL=0
-${COMPOSE} exec -T formatter-paper test -f /app/custom_agents/formatter_paper/lib/libSkiaSharp.so || SKIA_FAIL=1
+${COMPOSE} exec -T formatter-paper test -f /opt/formatter-paper/native/libSkiaSharp.so || SKIA_FAIL=1
 if [ "${SKIA_FAIL}" -eq 0 ]; then
   echo "OK: libSkiaSharp.so present (Linux native)"
 else
   echo "WARN: libSkiaSharp.so missing — Linux pipeline needs it; bind-mount may only expose Windows DLLs"
+fi
+
+LDD_FAIL=0
+${COMPOSE} exec -T formatter-paper sh -c "ldd /opt/formatter-paper/native/libSkiaSharp.so | grep -q 'not found'" && LDD_FAIL=1 || true
+if [ "${LDD_FAIL}" -eq 0 ]; then
+  echo "OK: ldd reports no missing libSkiaSharp.so dependencies"
+else
+  echo "FAIL: ldd reports missing dependencies for /opt/formatter-paper/native/libSkiaSharp.so"
+  FAILED=1
 fi
 
 DF_FAIL=0

@@ -33,7 +33,7 @@ services:
       - ../custom_agents/formatter_paper/lib/SkiaSharp.dll:/opt/formatter-paper/managed/SkiaSharp.dll:ro
       - ../custom_agents/formatter_paper/lib/System.Text.Encoding.CodePages.dll:/opt/formatter-paper/managed/System.Text.Encoding.CodePages.dll:ro
       - ../custom_agents/formatter_paper/lib/runtimeconfig.json:/opt/formatter-paper/managed/runtimeconfig.json:ro
-      - ../Aspose.Total.lic:/opt/formatter-paper/license/Aspose.Total.NET.lic:ro
+      - ../Aspose.Total.NET.lic:/opt/formatter-paper/license/Aspose.Total.NET.lic:ro
       # Same host paths as gateway: skills + thread data (sandbox uses /mnt/skills; gateway uses /app/skills).
       - ../skills:/app/skills:ro
       - ../skills:/mnt/skills:ro
@@ -49,10 +49,14 @@ services:
       - FORMATTER_PAPER_HTTP_PORT=8765
       - FORMATTER_PAPER_HTTP_PATH=/mcp
       - FORMATTER_PAPER_PUBLIC_BASE_URL=${FORMATTER_PAPER_PUBLIC_BASE_URL:-http://formatter-paper:8765}
+      - MODELSCOPE_API_KEY=${MODELSCOPE_API_KEY:-}
+      - OPENAI_API_KEY=${OPENAI_API_KEY:-}
       - ASPOSE_MANAGED_DIR=/opt/formatter-paper/managed
       - ASPOSE_NATIVE_DIR=/opt/formatter-paper/native
       - ASPOSE_LICENSE_PATH=/opt/formatter-paper/license/Aspose.Total.NET.lic
       - ASPOSE_LIBS=/opt/formatter-paper/managed
+    env_file:
+      - ../.env
     ports:
       - "${FORMATTER_PAPER_PORT:-8765}:8765"
     networks:
@@ -191,7 +195,7 @@ services:
       - gateway-venv:/app/backend/.venv
       - ../config.yaml:/app/config.yaml
       - ../extensions_config.json:/app/extensions_config.json
-      - ../Aspose.Total.lic:/app/backend/Aspose.Total.lic:ro
+      - ../Aspose.Total.NET.lic:/app/backend/Aspose.Total.NET.lic:ro
       - ../custom_agents/formatter_paper/lib:/app/custom_agents/formatter_paper/lib:ro
       - ../skills:/app/skills
       - ../logs:/app/logs
@@ -220,7 +224,7 @@ services:
       - FORMATTER_PAPER_MCP_URL=${FORMATTER_PAPER_MCP_URL:-http://formatter-paper:8765/mcp}
       - ASPOSE_LIBS=/app/custom_agents/formatter_paper/lib
       - DOTNET_ROOT=/app/custom_agents/formatter_paper/.dotnet
-      - ASPOSE_LICENSE_PATH=/app/backend/Aspose.Total.lic
+      - ASPOSE_LICENSE_PATH=/app/backend/Aspose.Total.NET.lic
       - DEER_FLOW_CHANNELS_LANGGRAPH_URL=${DEER_FLOW_CHANNELS_LANGGRAPH_URL:-http://langgraph:2024}
       - DEER_FLOW_CHANNELS_GATEWAY_URL=${DEER_FLOW_CHANNELS_GATEWAY_URL:-http://gateway:8001}
       - DEER_FLOW_HOST_BASE_DIR=${DEER_FLOW_ROOT}/backend/.deer-flow
@@ -260,7 +264,7 @@ services:
       - langgraph-venv:/app/backend/.venv
       - ../config.yaml:/app/config.yaml
       - ../extensions_config.json:/app/extensions_config.json
-      - ../Aspose.Total.lic:/app/backend/Aspose.Total.lic:ro
+      - ../Aspose.Total.NET.lic:/app/backend/Aspose.Total.NET.lic:ro
       - ../custom_agents/formatter_paper/lib:/app/custom_agents/formatter_paper/lib:ro
       - ../skills:/app/skills
       - ../logs:/app/logs
@@ -289,7 +293,7 @@ services:
       - FORMATTER_PAPER_MCP_URL=${FORMATTER_PAPER_MCP_URL:-http://formatter-paper:8765/mcp}
       - ASPOSE_LIBS=/app/custom_agents/formatter_paper/lib
       - DOTNET_ROOT=/app/custom_agents/formatter_paper/.dotnet
-      - ASPOSE_LICENSE_PATH=/app/backend/Aspose.Total.lic
+      - ASPOSE_LICENSE_PATH=/app/backend/Aspose.Total.NET.lic
       - DEER_FLOW_HOST_BASE_DIR=${DEER_FLOW_ROOT}/backend/.deer-flow
       - DEER_FLOW_HOST_SKILLS_PATH=${DEER_FLOW_ROOT}/skills
       - DEER_FLOW_SANDBOX_HOST=host.docker.internal

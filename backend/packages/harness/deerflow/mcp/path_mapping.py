@@ -8,6 +8,8 @@ from pathlib import Path
 from collections.abc import Mapping
 from typing import Any
 
+from langgraph.config import get_config
+
 from deerflow.config.extensions_config import ExtensionsConfig, McpServerConfig
 from deerflow.config.paths import VIRTUAL_PATH_PREFIX, get_paths
 
@@ -90,6 +92,14 @@ def _extract_request_thread_id(request: Any) -> str | None:
         thread_id = _extract_thread_id_from_mapping(request)
         if thread_id:
             return thread_id
+
+    try:
+        current_config = get_config()
+    except Exception:
+        current_config = None
+    thread_id = _extract_thread_id_from_mapping(current_config if isinstance(current_config, Mapping) else None)
+    if thread_id:
+        return thread_id
 
     return _extract_thread_id(getattr(request, "runtime", None))
 

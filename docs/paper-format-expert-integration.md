@@ -38,7 +38,7 @@ After changing `extensions_config.json`, Deer Flow should reload the enabled ext
 - `custom_agents/formatter_paper/` contains the low-level Aspose-backed capability and the standalone HTTP MCP service.
 - `formatter-paper` MCP is now a remote HTTP service instead of a backend-local stdio subprocess.
 - `paper-format-expert` is the orchestration layer that chooses when and how to call it.
-- `smart_repair` remains an internal formatter capability; Deer Flow should not consume its planner/state objects directly.
+- `smart_repair` no longer acts as the recommended formatter-side black-box orchestrator; the skill owns repair decisions and iteration control.
 - `formatter_pipeline_hooks.py` remains disabled-by-default and formatter-internal; Deer Flow integration should use explicit MCP tools rather than automatic hooks.
 
 ## Docker Runtime Prerequisites
@@ -123,3 +123,6 @@ Current tool surface:
 
 - `format_paper`: fast one-shot formatting pipeline
 - `repair_paper_pagination`: one-shot formatting plus iterative page-stream pagination repair for heading/caption attachment
+- `audit_repair_issues`: inspect prepared repair artifacts and emit structured issues only
+- `apply_repair_actions`: apply schema-validated repair actions and re-extract outline/structure JSON
+- `assess_repair_progress`: compare audit snapshots and decide whether another iteration is warranted

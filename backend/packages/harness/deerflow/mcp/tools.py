@@ -7,9 +7,11 @@ import logging
 import os
 import time
 from collections.abc import Callable
-from typing import Any
+from typing import Annotated, Any
 
-from langchain_core.tools import BaseTool
+from langgraph.config import get_config
+from langchain_core.runnables import RunnableConfig
+from langchain_core.tools import BaseTool, InjectedToolArg
 
 from deerflow.config.extensions_config import ExtensionsConfig
 from deerflow.mcp.client import build_servers_config
@@ -18,6 +20,7 @@ from deerflow.mcp.path_mapping import build_path_mapping_tool_interceptor
 
 logger = logging.getLogger(__name__)
 _DEFAULT_MCP_INIT_TIMEOUT_SECONDS = 20.0
+_THREAD_ID_INJECTION_SERVER_PREFIXES = ("formatter-paper_",)
 
 # Global thread pool for sync tool invocation in async environments
 _SYNC_TOOL_EXECUTOR = concurrent.futures.ThreadPoolExecutor(max_workers=10, thread_name_prefix="mcp-sync-tool")
@@ -55,6 +58,76 @@ def _make_sync_tool_wrapper(coro: Callable[..., Any], tool_name: str) -> Callabl
             raise
 
     return sync_wrapper
+
+
+def _extract_thread_id(config: RunnableConfig | None, runtime: Any = None) -> str | None:
+    configurable = (config or {}).get("configurable", {}) if isinstance(config, dict) else {}
+    thread_id = configurable.get("thread_id") if isinstance(configurable, dict) else None
+    if thread_id:
+        return str(thread_id)
+
+    if runtime is not None:
+        context = getattr(runtime, "context", None) or {}
+        thread_id = context.get("thread_id") if isinstance(context, dict) else getattr(context, "thread_id", None)
+        if thread_id:
+            return str(thread_id)
+
+        runtime_config = getattr(runtime, "config", None) or {}
+        runtime_configurable = runtime_config.get("configurable", {}) if isinstance(runtime_config, dict) else getattr(runtime_config, "configurable", None)
+        if isinstance(runtime_configurable, dict):
+            thread_id = runtime_configurable.get("thread_id")
+        else:
+            thread_id = getattr(runtime_configurable, "thread_id", None)
+        if thread_id:
+            return str(thread_id)
+
+        thread_id = getattr(runtime, "thread_id", None)
+        if thread_id:
+            return str(thread_id)
+
+    try:
+        current_config = get_config()
+    except Exception:
+        current_config = None
+    current_configurable = (current_config or {}).get("configurable", {}) if isinstance(current_config, dict) else {}
+    thread_id = current_configurable.get("thread_id") if isinstance(current_configurable, dict) else None
+    if thread_id:
+        return str(thread_id)
+
+    return None
+
+
+def _should_inject_thread_id(tool_name: str) -> bool:
+    return any(tool_name.startswith(prefix) for prefix in _THREAD_ID_INJECTION_SERVER_PREFIXES)
+
+
+def _wrap_tool_for_thread_id_injection(tool: BaseTool) -> None:
+    if not _should_inject_thread_id(tool.name):
+        return
+
+    original_coro = getattr(tool, "coroutine", None)
+    if original_coro is None:
+        return
+
+    async def wrapped_coro(
+        *args: Any,
+        config: Annotated[RunnableConfig | None, InjectedToolArg] = None,
+        runtime: Any = None,
+        **kwargs: Any,
+    ) -> Any:
+        if not kwargs.get("thread_id"):
+            thread_id = _extract_thread_id(config, runtime)
+            if thread_id:
+                kwargs["thread_id"] = thread_id
+                logger.info("Auto-injected thread_id for MCP tool %s: %s", tool.name, thread_id)
+            else:
+                logger.warning("Failed to auto-inject thread_id for MCP tool %s", tool.name)
+        if runtime is not None and "runtime" not in kwargs:
+            kwargs["runtime"] = runtime
+        return await original_coro(*args, **kwargs)
+
+    tool.coroutine = wrapped_coro
+    tool.func = _make_sync_tool_wrapper(tool.coroutine, tool.name)
 
 
 async def get_mcp_tools() -> list[BaseTool]:
@@ -113,8 +186,9 @@ async def get_mcp_tools() -> list[BaseTool]:
         elapsed = time.monotonic() - started_at
         logger.info(f"Successfully loaded {len(tools)} tool(s) from MCP servers in {elapsed:.2f}s")
 
-        # Patch tools to support sync invocation, as deerflow client streams synchronously
+        # Patch tools to support thread_id injection and sync invocation.
         for tool in tools:
+            _wrap_tool_for_thread_id_injection(tool)
             if getattr(tool, "func", None) is None and getattr(tool, "coroutine", None) is not None:
                 tool.func = _make_sync_tool_wrapper(tool.coroutine, tool.name)
 

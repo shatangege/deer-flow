@@ -50,10 +50,14 @@ services:
       - FORMATTER_PAPER_HTTP_PORT=8765
       - FORMATTER_PAPER_HTTP_PATH=/mcp
       - FORMATTER_PAPER_PUBLIC_BASE_URL=${FORMATTER_PAPER_PUBLIC_BASE_URL:-http://formatter-paper:8765}
+      - MODELSCOPE_API_KEY=${MODELSCOPE_API_KEY:-}
+      - OPENAI_API_KEY=${OPENAI_API_KEY:-}
       - ASPOSE_MANAGED_DIR=/opt/formatter-paper/managed
       - ASPOSE_NATIVE_DIR=/opt/formatter-paper/native
       - ASPOSE_LICENSE_PATH=/opt/formatter-paper/license/Aspose.Total.NET.lic
       - ASPOSE_LIBS=/opt/formatter-paper/managed
+    env_file:
+      - ../.env
     ports:
       - "${FORMATTER_PAPER_PORT:-8765}:8765"
     networks:

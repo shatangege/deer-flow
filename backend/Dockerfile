@@ -38,6 +38,7 @@ RUN apt-get update && apt-get install -y \
     build-essential \
     gnupg \
     ca-certificates \
+    libexpat1 \
     libicu72 \
     libfontconfig1 \
     libfreetype6 \
@@ -45,6 +46,14 @@ RUN apt-get update && apt-get install -y \
     libjpeg62-turbo \
     libharfbuzz0b \
     libglib2.0-0 \
+    libstdc++6 \
+    libuuid1 \
+    libx11-6 \
+    libxau6 \
+    libxcb1 \
+    libxext6 \
+    libxrender1 \
+    zlib1g \
     && mkdir -p /etc/apt/keyrings \
     && curl -fsSL "${NODESOURCE_BASE_URL}/gpgkey/nodesource-repo.gpg.key" | gpg --dearmor -o /etc/apt/keyrings/nodesource.gpg \
     && echo "deb [signed-by=/etc/apt/keyrings/nodesource.gpg] ${NODESOURCE_BASE_URL}/node_${NODE_MAJOR}.x nodistro main" > /etc/apt/sources.list.d/nodesource.list \
