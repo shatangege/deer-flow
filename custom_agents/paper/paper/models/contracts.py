@@ -54,6 +54,7 @@ class RuleBundle:
     heading_levels: dict[str, int]
     style_profile: dict[str, Any]
     required_sections: list[str]
+    target_outline: list[OutlineItem] = field(default_factory=list)
     outline_generation_mode: str = "rules_only"
     outline_candidates_summary: list[dict[str, Any]] = field(default_factory=list)
     outline_confirmation_notes: list[str] = field(default_factory=list)
@@ -68,6 +69,7 @@ class RuleBundle:
     def to_dict(self) -> dict[str, Any]:
         payload = asdict(self)
         payload["template_outline"] = [item.to_dict() for item in self.template_outline]
+        payload["target_outline"] = [item.to_dict() for item in self.target_outline]
         return payload
 
     @classmethod
@@ -75,6 +77,7 @@ class RuleBundle:
         return cls(
             template_docx_path=payload["template_docx_path"],
             template_outline=[OutlineItem(**item) for item in payload.get("template_outline", [])],
+            target_outline=[OutlineItem(**item) for item in payload.get("target_outline", payload.get("template_outline", []))],
             heading_levels=dict(payload.get("heading_levels", {})),
             style_profile=dict(payload.get("style_profile", {})),
             required_sections=list(payload.get("required_sections", [])),
@@ -102,6 +105,8 @@ class SectionChunk:
     source_docx_path: str
     source_section_docx_path: str | None = None
     source_heading_title: str | None = None
+    source_mapping_kind: str | None = None
+    target_mapping_record: dict[str, Any] = field(default_factory=dict)
     source_excerpt: str = ""
     source_paragraph_range: tuple[int | None, int | None] = (None, None)
     source_block_range: tuple[int | None, int | None] = (None, None)
@@ -113,6 +118,11 @@ class SectionChunk:
     allow_page_break_before: bool = False
     keep_with_next_hints: list[str] = field(default_factory=list)
     target_element_style_slots: dict[str, Any] = field(default_factory=dict)
+    assigned_source_blocks: list[str] = field(default_factory=list)
+    unmapped_source_block_keys: list[str] = field(default_factory=list)
+    block_mapping_summary: dict[str, Any] = field(default_factory=dict)
+    block_mapping_warnings: list[dict[str, Any]] = field(default_factory=list)
+    style_slot_hints: list[str] = field(default_factory=list)
     statistics: dict[str, Any] = field(default_factory=dict)
     missing_required_content: bool = False
     risk_flags: list[str] = field(default_factory=list)
@@ -146,6 +156,12 @@ class SectionResult:
     remaining_risks: list[str] = field(default_factory=list)
     applied_style_slots: list[str] = field(default_factory=list)
     style_slot_mismatches: list[dict[str, Any]] = field(default_factory=list)
+    consumed_source_block_keys: list[str] = field(default_factory=list)
+    unmapped_source_block_keys: list[str] = field(default_factory=list)
+    block_mapping_summary: dict[str, Any] = field(default_factory=dict)
+    block_mapping_warnings: list[dict[str, Any]] = field(default_factory=list)
+    content_integrity_pass: bool = True
+    source_mapping_kind: str | None = None
     template_section_title: str = ""
     template_section_order: int = 0
     metadata: dict[str, Any] = field(default_factory=dict)
@@ -156,6 +172,19 @@ class SectionResult:
     @classmethod
     def from_dict(cls, payload: dict[str, Any]) -> "SectionResult":
         return cls(**payload)
+
+
+@dataclass(slots=True)
+class RepairPlan:
+    issue_kind: str
+    owner_agent: str
+    target_section_title: str | None = None
+    repair_action: str = ""
+    reason: str = ""
+    retry_scope: str = "global"
+
+    def to_dict(self) -> dict[str, Any]:
+        return asdict(self)
 
 
 @dataclass(slots=True)
@@ -171,8 +200,26 @@ class AggregateReport:
     section_break_warnings: list[dict[str, Any]] = field(default_factory=list)
     excess_blank_space_warnings: list[dict[str, Any]] = field(default_factory=list)
     front_matter_warnings: list[dict[str, Any]] = field(default_factory=list)
+    content_integrity_warnings: list[dict[str, Any]] = field(default_factory=list)
+    block_mapping_warnings: list[dict[str, Any]] = field(default_factory=list)
+    unmapped_source_blocks: list[str] = field(default_factory=list)
+    duplicate_mapped_blocks: list[str] = field(default_factory=list)
+    mapping_warnings: list[dict[str, Any]] = field(default_factory=list)
+    repair_candidates: list[RepairPlan] = field(default_factory=list)
+    recommended_next_step: str = ""
     outline_pass: bool = False
     processing_stats: dict[str, Any] = field(default_factory=dict)
 
+    def __post_init__(self) -> None:
+        normalized: list[RepairPlan] = []
+        for item in self.repair_candidates:
+            if isinstance(item, RepairPlan):
+                normalized.append(item)
+            else:
+                normalized.append(RepairPlan(**item))
+        self.repair_candidates = normalized
+
     def to_dict(self) -> dict[str, Any]:
-        return asdict(self)
+        payload = asdict(self)
+        payload["repair_candidates"] = [item.to_dict() for item in self.repair_candidates]
+        return payload

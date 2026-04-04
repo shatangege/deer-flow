@@ -8,7 +8,7 @@ from .parsing_rules import classify_paragraph_role, classify_section_role
 from .utils import normalize_title
 
 
-_HEADING_NUMBER_RE = re.compile(r"^\s*((\d+(\.\d+)*)|([IVXLC]+)|([A-Z]))[\.\)\-、 ]+")
+_HEADING_NUMBER_RE = re.compile(r"^\s*((\d+(\.\d+)*)|([IVXLC]+)|([A-Z]))[\.\)\-、]+")
 
 
 def classify_heading_role(text: str, normalized_text: str | None = None) -> str:
@@ -39,17 +39,17 @@ def _is_probable_toc(text: str) -> bool:
 
 def _is_probable_reference_heading(text: str) -> bool:
     lowered = (text or "").strip().lower()
-    return "参考文献" in lowered or lowered == "references" or lowered == "bibliography"
+    return "参考文献" in (text or "") or lowered in {"references", "bibliography"}
 
 
 def _is_probable_appendix_heading(text: str) -> bool:
     lowered = (text or "").strip().lower()
-    return lowered.startswith("appendix") or "附录" in lowered
+    return lowered.startswith("appendix") or "附录" in (text or "")
 
 
 def _is_probable_front_matter(text: str) -> bool:
     lowered = (text or "").strip().lower()
-    return lowered in {"摘要", "abstract", "关键词", "keywords", "致谢", "acknowledgements", "acknowledgments"}
+    return lowered in {"abstract", "keywords", "acknowledgements", "acknowledgments"} or (text or "").strip() in {"摘要", "关键词", "致谢"}
 
 
 def _candidate_from_outline_item(item: OutlineItem, section_role: str | None = None, paragraph_role: str | None = None) -> dict[str, Any]:

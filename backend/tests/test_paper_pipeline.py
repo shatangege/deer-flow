@@ -195,6 +195,14 @@ def test_split_sections_preserves_template_coverage(tmp_path: Path):
     assert chunks[0].layout_flow_mode in {"continuous", "new_page"}
     assert isinstance(chunks[0].keep_with_next_hints, list)
     assert "heading" in chunks[0].target_element_style_slots
+    assert chunks[0].assigned_source_blocks
+    assert isinstance(chunks[0].unmapped_source_block_keys, list)
+    assert chunks[0].source_mapping_kind == "exact_title_match"
+    assert "source_block_count" in chunks[0].block_mapping_summary
+    assert "block_type_counts" in chunks[0].block_mapping_summary
+    assert "paragraph_role_counts" in chunks[0].block_mapping_summary
+    assert "section_role_counts" in chunks[0].block_mapping_summary
+    assert isinstance(chunks[0].block_mapping_warnings, list)
 
 
 def test_run_pipeline_produces_final_report(tmp_path: Path):
@@ -217,7 +225,31 @@ def test_run_pipeline_produces_final_report(tmp_path: Path):
     assert "pagination_warnings" in report_payload
     assert "section_break_warnings" in report_payload
     assert "excess_blank_space_warnings" in report_payload
+    assert "content_integrity_warnings" in report_payload
+    assert "block_mapping_warnings" in report_payload
+    assert "unmapped_source_blocks" in report_payload
+    assert "mapping_warnings" in report_payload
+    assert "repair_candidates" in report_payload
+    assert "recommended_next_step" in report_payload
     assert report_payload["processing_stats"]["section_count_before_merge"] == 2
+    assert "recommended_next_step" in result
+    assert "repair_candidates" in result
+
+
+def test_run_pipeline_with_repair_attempts_follow_up_cycle(tmp_path: Path):
+    service = PaperPipelineService(executor=FakeExecutor(tmp_path))
+    source = tmp_path / "source.docx"
+    template = tmp_path / "template.docx"
+    final = tmp_path / "final-repair.docx"
+    report = tmp_path / "report-repair.json"
+    source.write_text("source", encoding="utf-8")
+    template.write_text("template", encoding="utf-8")
+
+    result = service.run_pipeline_with_repair(str(source), str(template), str(final), str(report))
+
+    assert "repair_attempted" in result
+    assert "repair_scope" in result
+    assert result["repair_scope"] in {"none", "single_section", "merge_only", "mapping", "global"}
 
 
 def test_extract_template_rules_records_outline_generation_metadata(tmp_path: Path):
@@ -230,6 +262,7 @@ def test_extract_template_rules_records_outline_generation_metadata(tmp_path: Pa
     assert rules.outline_generation_mode == "rules_only"
     assert rules.outline_confirmation_notes
     assert len(rules.outline_candidates_summary) == 2
+    assert [item.title for item in rules.target_outline] == ["Introduction", "Methods"]
     assert "introduction" in rules.section_element_style_map
     assert "heading" in rules.section_element_style_map["introduction"]["element_styles"]
 
@@ -256,3 +289,137 @@ def test_extract_template_rules_uses_llm_confirmation_when_available(tmp_path: P
 
     assert rules.outline_generation_mode == "rules_plus_llm"
     assert [item.title for item in rules.template_outline] == ["Methods"]
+
+
+def test_flow_scheduler_builds_target_outline_with_source_only_sections(tmp_path: Path):
+    class SourceExtraExecutor(FakeExecutor):
+        def extract_outline(self, docx_path: str):
+            name = Path(docx_path).name
+            if "template" in name:
+                return super().extract_outline(docx_path)
+            return [
+                OutlineItem(id="s1", title="Introduction", normalized_title="introduction", level=1, order=1, source_paragraph_index=0),
+                OutlineItem(id="s2", title="Discussion", normalized_title="discussion", level=1, order=2, source_paragraph_index=2),
+            ]
+
+        def extract_structure(self, docx_path: str, outline=None):
+            name = Path(docx_path).name
+            if "template" in name:
+                return super().extract_structure(docx_path, outline=outline)
+            return {
+                "statistics": {"block_count": 2, "paragraph_count": 2, "table_count": 0, "image_count": 0},
+                "blocks": [
+                    {
+                        "block_key": "p:0",
+                        "block_type": "paragraph",
+                        "block_index": 0,
+                        "paragraph_index": 0,
+                        "text": "Introduction",
+                        "normalized_text": "introduction",
+                        "style_name": "Heading 1",
+                        "section_path": [{"normalized_title": "introduction", "title": "Introduction"}],
+                        "section_role": "body",
+                        "paragraph_role": None,
+                        "metadata": {},
+                    },
+                    {
+                        "block_key": "p:1",
+                        "block_type": "paragraph",
+                        "block_index": 1,
+                        "paragraph_index": 1,
+                        "text": "Discussion",
+                        "normalized_text": "discussion",
+                        "style_name": "Heading 1",
+                        "section_path": [{"normalized_title": "discussion", "title": "Discussion"}],
+                        "section_role": "body",
+                        "paragraph_role": None,
+                        "metadata": {},
+                    },
+                ],
+                "page_setup": [{"page_width": 595.0, "left_margin": 90.0, "right_margin": 90.0}],
+                "section_layouts": [{"section_index": 0, "page_width": 595.0, "left_margin": 90.0, "right_margin": 90.0}],
+                "document_styles": [],
+            }
+
+    service = PaperPipelineService(executor=SourceExtraExecutor(tmp_path))
+    source = tmp_path / "source.docx"
+    template = tmp_path / "template.docx"
+    source.write_text("source", encoding="utf-8")
+    template.write_text("template", encoding="utf-8")
+
+    rules = service.extract_template_rules(str(template))
+    chunks = service.split_sections(str(source), rules, str(tmp_path / "sections-extra.json"))
+
+    assert [item.title for item in rules.target_outline] == ["Introduction", "Methods", "Discussion"]
+    assert rules.mapping_rules["target_outline_strategy"] == "template_backbone_plus_source_append"
+    mapping = rules.mapping_rules["source_to_target_outline_map"]
+    assert any(item["match_kind"] == "exact_title_match" and item["source_title"] == "Introduction" for item in mapping)
+    assert any(item["match_kind"] == "source_only_append" and item["source_title"] == "Discussion" for item in mapping)
+    assert any(chunk.template_title == "Discussion" for chunk in chunks)
+    discussion_chunk = next(chunk for chunk in chunks if chunk.template_title == "Discussion")
+    assert discussion_chunk.source_mapping_kind == "source_only_append"
+    assert "heading" in discussion_chunk.target_element_style_slots
+
+
+def test_flow_scheduler_uses_conservative_alias_mapping_for_standard_sections(tmp_path: Path):
+    class AliasExecutor(FakeExecutor):
+        def extract_outline(self, docx_path: str):
+            name = Path(docx_path).name
+            if "template" in name:
+                return [
+                    OutlineItem(id="h1", title="Introduction", normalized_title="introduction", level=1, order=1, source_paragraph_index=0),
+                    OutlineItem(id="h2", title="References", normalized_title="references", level=1, order=2, source_paragraph_index=3),
+                ]
+            return [
+                OutlineItem(id="s1", title="Introduction", normalized_title="introduction", level=1, order=1, source_paragraph_index=0),
+                OutlineItem(id="s2", title="Bibliography", normalized_title="bibliography", level=1, order=2, source_paragraph_index=2),
+            ]
+
+        def extract_outline_candidates(self, docx_path: str):
+            name = Path(docx_path).name
+            if "template" in name:
+                return [
+                    {"id": "h1", "title": "Introduction", "normalized_title": "introduction", "candidate_level": 1, "level": 1, "order": 1, "source_paragraph_index": 0, "style_name": "Heading 1", "page_index": 1, "path": ["Introduction"], "section_role": "body", "paragraph_role": None, "is_probable_caption": False, "is_probable_toc": False},
+                    {"id": "h2", "title": "References", "normalized_title": "references", "candidate_level": 1, "level": 1, "order": 2, "source_paragraph_index": 3, "style_name": "Heading 1", "page_index": 2, "path": ["References"], "section_role": "references", "paragraph_role": None, "is_probable_caption": False, "is_probable_toc": False},
+                ]
+            return []
+
+        def extract_structure(self, docx_path: str, outline=None):
+            name = Path(docx_path).name
+            if "template" in name:
+                return {
+                    "statistics": {"block_count": 2, "paragraph_count": 2, "table_count": 0, "image_count": 0},
+                    "blocks": [
+                        {"block_key": "p:0", "block_type": "paragraph", "block_index": 0, "paragraph_index": 0, "text": "Introduction", "normalized_text": "introduction", "style_name": "Heading 1", "section_path": [{"normalized_title": "introduction", "title": "Introduction"}], "section_role": "body", "paragraph_role": None, "metadata": {}},
+                        {"block_key": "p:1", "block_type": "paragraph", "block_index": 1, "paragraph_index": 1, "text": "References", "normalized_text": "references", "style_name": "Heading 1", "section_path": [{"normalized_title": "references", "title": "References"}], "section_role": "references", "paragraph_role": None, "metadata": {}},
+                    ],
+                    "page_setup": [{"page_width": 595.0, "left_margin": 90.0, "right_margin": 90.0}],
+                    "section_layouts": [{"section_index": 0, "page_width": 595.0, "left_margin": 90.0, "right_margin": 90.0}],
+                    "document_styles": [],
+                }
+            return {
+                "statistics": {"block_count": 2, "paragraph_count": 2, "table_count": 0, "image_count": 0},
+                "blocks": [
+                    {"block_key": "p:0", "block_type": "paragraph", "block_index": 0, "paragraph_index": 0, "text": "Introduction", "normalized_text": "introduction", "style_name": "Heading 1", "section_path": [{"normalized_title": "introduction", "title": "Introduction"}], "section_role": "body", "paragraph_role": None, "metadata": {}},
+                    {"block_key": "p:1", "block_type": "paragraph", "block_index": 1, "paragraph_index": 1, "text": "Bibliography", "normalized_text": "bibliography", "style_name": "Heading 1", "section_path": [{"normalized_title": "bibliography", "title": "Bibliography"}], "section_role": "references", "paragraph_role": None, "metadata": {}},
+                ],
+                "page_setup": [{"page_width": 595.0, "left_margin": 90.0, "right_margin": 90.0}],
+                "section_layouts": [{"section_index": 0, "page_width": 595.0, "left_margin": 90.0, "right_margin": 90.0}],
+                "document_styles": [],
+            }
+
+    service = PaperPipelineService(executor=AliasExecutor(tmp_path))
+    source = tmp_path / "source.docx"
+    template = tmp_path / "template.docx"
+    source.write_text("source", encoding="utf-8")
+    template.write_text("template", encoding="utf-8")
+
+    rules = service.extract_template_rules(str(template))
+    chunks = service.split_sections(str(source), rules, str(tmp_path / "sections-alias.json"))
+
+    assert [item.title for item in rules.target_outline] == ["Introduction", "References"]
+    mapping = rules.mapping_rules["source_to_target_outline_map"]
+    assert any(item["match_kind"] == "conservative_alias_match" and item["source_title"] == "Bibliography" and item["target_title"] == "References" for item in mapping)
+    assert not any(chunk.template_title == "Bibliography" for chunk in chunks)
+    references_chunk = next(chunk for chunk in chunks if chunk.template_title == "References")
+    assert references_chunk.source_mapping_kind == "conservative_alias_match"

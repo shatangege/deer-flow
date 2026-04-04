@@ -6,6 +6,8 @@ import os
 import shutil
 import subprocess
 import tempfile
+import urllib.request
+import zipfile
 from datetime import datetime
 
 
@@ -58,10 +60,77 @@ def configure_local_dotnet(runtime_host) -> None:
             )
 
 
+def _candidate_linux_native_dirs(runtime_host) -> list[str]:
+    candidates = [
+        getattr(runtime_host, "native_dir", ""),
+        os.environ.get("ASPOSE_NATIVE_DIR", "").strip(),
+        getattr(runtime_host, "managed_dir", ""),
+        os.path.join(getattr(runtime_host, "script_dir", ""), "lib"),
+        "/opt/paper-agent/native",
+        "/app/custom_agents/paper/lib",
+    ]
+    resolved: list[str] = []
+    seen: set[str] = set()
+    for candidate in candidates:
+        if not candidate:
+            continue
+        path = os.path.abspath(candidate)
+        if path in seen:
+            continue
+        seen.add(path)
+        resolved.append(path)
+    return resolved
+
+
+def _bootstrap_linux_native_dependency(runtime_host) -> str | None:
+    package_name = os.environ.get("SKIASHARP_NATIVE_PACKAGE", "SkiaSharp.NativeAssets.Linux").strip() or "SkiaSharp.NativeAssets.Linux"
+    package_version = os.environ.get("SKIASHARP_NATIVE_VERSION", "2.88.9").strip() or "2.88.9"
+    flat_container_base = os.environ.get("NUGET_FLAT_CONTAINER_BASE", "https://api.nuget.org/v3-flatcontainer").rstrip("/")
+    package_lower = package_name.lower()
+    version_lower = package_version.lower()
+    download_url = f"{flat_container_base}/{package_lower}/{version_lower}/{package_lower}.{version_lower}.nupkg"
+    cache_root = os.path.join(tempfile.gettempdir(), "paper_agent", "native-cache", f"{package_lower}-{version_lower}")
+    native_dir = os.path.join(cache_root, "linux-x64")
+    native_path = os.path.join(native_dir, "libSkiaSharp.so")
+    if os.path.exists(native_path):
+        return native_path
+    os.makedirs(native_dir, exist_ok=True)
+    package_path = os.path.join(cache_root, f"{package_lower}.{version_lower}.nupkg")
+    try:
+        if not os.path.exists(package_path):
+            with urllib.request.urlopen(download_url, timeout=30) as response, open(package_path, "wb") as handle:
+                shutil.copyfileobj(response, handle)
+        with zipfile.ZipFile(package_path) as archive:
+            with archive.open("runtimes/linux-x64/native/libSkiaSharp.so") as source, open(native_path, "wb") as target:
+                shutil.copyfileobj(source, target)
+        return native_path if os.path.exists(native_path) else None
+    except Exception:
+        return None
+
+
+def resolve_linux_native_path(runtime_host) -> str:
+    if os.name == "nt":
+        return os.path.join(runtime_host.native_dir, "libSkiaSharp.dll")
+    for candidate_dir in _candidate_linux_native_dirs(runtime_host):
+        candidate_path = os.path.join(candidate_dir, "libSkiaSharp.so")
+        if os.path.exists(candidate_path):
+            if getattr(runtime_host, "native_dir", "") != candidate_dir:
+                runtime_host.native_dir = candidate_dir
+                os.environ["ASPOSE_NATIVE_DIR"] = candidate_dir
+            return candidate_path
+    bootstrapped_path = _bootstrap_linux_native_dependency(runtime_host)
+    if bootstrapped_path:
+        bootstrapped_dir = os.path.dirname(bootstrapped_path)
+        runtime_host.native_dir = bootstrapped_dir
+        os.environ["ASPOSE_NATIVE_DIR"] = bootstrapped_dir
+        return bootstrapped_path
+    return os.path.join(runtime_host.native_dir, "libSkiaSharp.so")
+
+
 def ensure_linux_native_available(runtime_host) -> None:
     if os.name == "nt":
         return
-    native_path = os.path.join(runtime_host.native_dir, "libSkiaSharp.so")
+    native_path = resolve_linux_native_path(runtime_host)
     if not os.path.exists(native_path):
         raise RuntimeError(f"Missing Linux native dependency: {native_path}")
     try:
@@ -117,7 +186,7 @@ def _ensure_native_probe_copy(source_path: str, target_dir: str) -> None:
 def prepare_native_probe_paths(runtime_host) -> None:
     if os.name == "nt":
         return
-    native_path = os.path.join(runtime_host.native_dir, "libSkiaSharp.so")
+    native_path = resolve_linux_native_path(runtime_host)
     if not os.path.exists(native_path):
         return
     probe_dirs = [runtime_host.managed_dir]
@@ -129,8 +198,8 @@ def prepare_native_probe_paths(runtime_host) -> None:
 
 
 def load_dependencies(runtime_host, caller_globals: dict[str, object]) -> None:
-    configure_local_dotnet(runtime_host)
     ensure_linux_native_available(runtime_host)
+    configure_local_dotnet(runtime_host)
     prepare_native_probe_paths(runtime_host)
 
     if runtime_host.system == "windows" and hasattr(os, "add_dll_directory"):

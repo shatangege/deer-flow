@@ -32,17 +32,23 @@ def build_parser() -> argparse.ArgumentParser:
     aggregate.add_argument("final_docx_path")
     aggregate.add_argument("--report-json-path")
 
-    pipeline = subparsers.add_parser("pipeline", help="Run the full paper pipeline")
+    pipeline = subparsers.add_parser("pipeline", help="Run the full paper pipeline in a single pass")
     pipeline.add_argument("source_docx_path")
     pipeline.add_argument("template_docx_path")
     pipeline.add_argument("final_docx_path")
     pipeline.add_argument("--report-json-path")
 
+    pipeline_repair = subparsers.add_parser("pipeline-repair", help="Run the full paper pipeline with one automatic repair cycle")
+    pipeline_repair.add_argument("source_docx_path")
+    pipeline_repair.add_argument("template_docx_path")
+    pipeline_repair.add_argument("final_docx_path")
+    pipeline_repair.add_argument("--report-json-path")
+
     return parser
 
 
 def known_commands() -> set[str]:
-    return {"template-rules", "split-sections", "process-section", "aggregate", "pipeline"}
+    return {"template-rules", "split-sections", "process-section", "aggregate", "pipeline", "pipeline-repair"}
 
 
 def dispatch_command(service: PaperPipelineService, args: argparse.Namespace):
@@ -74,6 +80,15 @@ def dispatch_command(service: PaperPipelineService, args: argparse.Namespace):
         return True
     if args.command == "pipeline":
         result = service.run_pipeline(
+            args.source_docx_path,
+            args.template_docx_path,
+            args.final_docx_path,
+            args.report_json_path,
+        )
+        print(json.dumps(result, ensure_ascii=False, indent=2))
+        return result["success"]
+    if args.command == "pipeline-repair":
+        result = service.run_pipeline_with_repair(
             args.source_docx_path,
             args.template_docx_path,
             args.final_docx_path,

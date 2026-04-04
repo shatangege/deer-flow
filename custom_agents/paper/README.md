@@ -30,6 +30,12 @@ The MCP surface is split into two layers:
 - High-level paper workflow tools for full formatting pipelines
 - Low-level Aspose execution tools for extraction, section rewriting, styling, validation, and merge operations
 
+For normal formatting, prefer the repaired high-level path:
+
+- `run_paper_pipeline_with_repair`
+
+Use the plain `run_paper_pipeline` path when you explicitly want a single-pass run without the follow-up repair cycle.
+
 ## Container Build
 
 ```bash
@@ -53,6 +59,30 @@ Linux native assets such as `libSkiaSharp.so` are still baked into the container
 - `process-section`
 - `aggregate`
 - `pipeline`
+- `pipeline-repair`
+
+## Repair Cycle Outputs
+
+The repaired high-level path returns these extra fields in addition to the normal pipeline result:
+
+- `repair_attempted`
+  - `true` when one automatic repair cycle was executed after the first aggregate review
+  - `false` when no repair was needed or no safe repair scope was selected
+- `repair_scope`
+  - `none`: no follow-up repair run happened
+  - `single_section`: only one or more flagged sections were reprocessed
+  - `merge_only`: only aggregation/layout normalization was rerun
+  - `mapping`: section mapping and downstream section processing were rerun
+  - `global`: the full pipeline was rerun once
+- `recommended_next_step`
+  - high-level guidance for the caller about the next preferred action
+  - common values include `no_repair_needed`, `repair_sections_then_reaggregate`, `repair_mapping_then_reprocess_sections`, and `rerun_merge_and_layout_normalization`
+
+When consuming pipeline results from code or MCP:
+
+- use `outline_pass` and `missing_sections` as the first hard gate
+- use `repair_attempted` and `repair_scope` to understand whether the returned output already includes one repair pass
+- use `recommended_next_step` and `repair_candidates` to decide whether to escalate to staged debugging or another controlled retry
 
 ## Notes
 

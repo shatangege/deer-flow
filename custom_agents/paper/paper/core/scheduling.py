@@ -41,13 +41,28 @@ def build_section_chunks(
     outline_by_title = {item.normalized_title: item for item in source_outline}
     outline_by_order = {item.order: item for item in source_outline}
     blocks_by_title = group_blocks_by_template_affinity(blocks)
+    outline_mapping = list((rule_bundle.mapping_rules or {}).get("source_to_target_outline_map") or [])
     chunks: list[SectionChunk] = []
-    for template_item in rule_bundle.template_outline:
+    target_outline = rule_bundle.target_outline or rule_bundle.template_outline
+    assigned_keys: set[str] = set()
+    for template_item in target_outline:
+        target_mapping_record = next(
+            (item for item in outline_mapping if item.get("target_normalized_title") == template_item.normalized_title),
+            {},
+        )
         matched_outline = outline_by_title.get(template_item.normalized_title) or outline_by_order.get(template_item.order)
         matched_blocks = blocks_by_title.get(template_item.normalized_title, [])
         section_role = matched_blocks[0].get("section_role") if matched_blocks else None
         section_style_slots = dict((rule_bundle.section_element_style_map.get(template_item.normalized_title) or {}).get("element_styles") or {})
         risk_flags = list(calculate_risk_flags(matched_blocks, matched_outline is None))
+        assigned_source_blocks = [item.get("block_key") for item in matched_blocks if item.get("block_key")]
+        block_mapping_summary, block_mapping_warnings = build_block_mapping_diagnostics(
+            matched_blocks=matched_blocks,
+            source_block_keys=[item.get("block_key") for item in matched_blocks if item.get("block_key")],
+            assigned_source_blocks=assigned_source_blocks,
+            missing_required_content=matched_outline is None,
+            template_title=template_item.title,
+        )
         preferred_section_start = None
         template_section_layouts = rule_bundle.layout_profile.get("section_layouts", [])
         if template_item.order - 1 < len(template_section_layouts):
@@ -70,6 +85,8 @@ def build_section_chunks(
                 source_docx_path=source_docx_path,
                 source_section_docx_path=split_map.get(matched_outline.id) if matched_outline else None,
                 source_heading_title=matched_outline.title if matched_outline else None,
+                source_mapping_kind=target_mapping_record.get("match_kind"),
+                target_mapping_record=target_mapping_record,
                 source_excerpt=matched_blocks[0].get("text", "") if matched_blocks else "",
                 source_paragraph_range=(
                     matched_outline.source_paragraph_index if matched_outline else None,
@@ -84,12 +101,21 @@ def build_section_chunks(
                 allow_page_break_before=bool(template_item.level == 1 and template_item.order > 1),
                 keep_with_next_hints=keep_with_next_hints,
                 target_element_style_slots=section_style_slots,
+                assigned_source_blocks=assigned_source_blocks,
+                style_slot_hints=list(section_style_slots.keys()),
+                block_mapping_summary=block_mapping_summary,
+                block_mapping_warnings=block_mapping_warnings,
                 statistics=build_chunk_statistics(matched_blocks),
                 missing_required_content=matched_outline is None,
                 risk_flags=risk_flags,
                 route=route["route"],
             )
         )
+        assigned_keys.update(item.get("block_key") for item in matched_blocks if item.get("block_key"))
+    all_source_keys = [item.get("block_key") for item in blocks if item.get("block_key")]
+    unmapped_keys = [key for key in all_source_keys if key not in assigned_keys]
+    for chunk in chunks:
+        chunk.unmapped_source_block_keys = list(unmapped_keys)
     return chunks
 
 
@@ -132,3 +158,58 @@ def build_chunk_statistics(blocks: list[dict[str, Any]]) -> dict[str, Any]:
         "table_count": len([item for item in blocks if item.get("block_type") == "table"]),
         "image_count": sum(int(item.get("image_count", 0) or 0) for item in blocks),
     }
+
+
+def build_block_mapping_diagnostics(
+    *,
+    matched_blocks: list[dict[str, Any]],
+    source_block_keys: list[str],
+    assigned_source_blocks: list[str],
+    missing_required_content: bool,
+    template_title: str,
+) -> tuple[dict[str, Any], list[dict[str, Any]]]:
+    source_set = set(source_block_keys)
+    assigned_counter = Counter(assigned_source_blocks)
+    duplicate_assigned_blocks = sorted([key for key, count in assigned_counter.items() if key and count > 1])
+    foreign_assigned_blocks = sorted([key for key in assigned_source_blocks if key and key not in source_set])
+    block_type_counts = Counter(str(item.get("block_type") or "") for item in matched_blocks if item.get("block_type"))
+    paragraph_role_counts = Counter(str(item.get("paragraph_role") or "") for item in matched_blocks if item.get("paragraph_role"))
+    section_role_counts = Counter(str(item.get("section_role") or "") for item in matched_blocks if item.get("section_role"))
+    summary = {
+        "source_block_count": len(source_block_keys),
+        "assigned_block_count": len(assigned_source_blocks),
+        "unique_assigned_block_count": len(set(assigned_source_blocks)),
+        "duplicate_assigned_blocks": duplicate_assigned_blocks,
+        "foreign_assigned_blocks": foreign_assigned_blocks,
+        "empty_mapping": bool(not assigned_source_blocks),
+        "block_type_counts": dict(block_type_counts),
+        "paragraph_role_counts": dict(paragraph_role_counts),
+        "section_role_counts": dict(section_role_counts),
+        "caption_block_count": sum(count for role, count in paragraph_role_counts.items() if role.startswith("caption")),
+    }
+    warnings: list[dict[str, Any]] = []
+    if duplicate_assigned_blocks:
+        warnings.append(
+            {
+                "kind": "duplicate_assigned_blocks_within_chunk",
+                "section_title": template_title,
+                "duplicate_assigned_blocks": duplicate_assigned_blocks,
+            }
+        )
+    if foreign_assigned_blocks:
+        warnings.append(
+            {
+                "kind": "foreign_assigned_blocks",
+                "section_title": template_title,
+                "foreign_assigned_blocks": foreign_assigned_blocks,
+            }
+        )
+    if not assigned_source_blocks and not missing_required_content:
+        warnings.append(
+            {
+                "kind": "empty_chunk_mapping",
+                "section_title": template_title,
+                "description": "section chunk did not retain any assigned source blocks",
+            }
+        )
+    return summary, warnings

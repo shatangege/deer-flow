@@ -14,7 +14,7 @@ from .shared_paths import resolve_existing_file, resolve_output_file
 
 
 SERVER_NAME = "paper"
-SERVER_VERSION = "0.2.0"
+SERVER_VERSION = "0.3.0"
 HTTP_HOST = os.getenv("PAPER_HTTP_HOST", "0.0.0.0")
 HTTP_PORT = int(os.getenv("PAPER_HTTP_PORT", os.getenv("PORT", "8766")))
 HTTP_PATH = os.getenv("PAPER_HTTP_PATH", "/mcp")
@@ -375,6 +375,30 @@ def run_paper_pipeline(
         final_path = resolve_output_file(final_docx_path, thread_id)
         report_path = resolve_output_file(report_json_path, thread_id) if report_json_path else None
         result = _service().run_pipeline(
+            str(source_path),
+            str(template_path),
+            str(final_path),
+            str(report_path) if report_path else None,
+        )
+        return _result(result, is_error=not result.get("success", False))
+    except Exception as exc:
+        return _result({"success": False, "error": str(exc)}, is_error=True)
+
+
+@app.tool(name="run_paper_pipeline_with_repair", description="Run the full paper pipeline and execute one automatic repair cycle based on the aggregate review.")
+def run_paper_pipeline_with_repair(
+    source_docx_path: str,
+    template_docx_path: str,
+    final_docx_path: str,
+    report_json_path: str | None = None,
+    thread_id: str | None = None,
+) -> dict[str, Any]:
+    try:
+        source_path = resolve_existing_file("source_docx_path", source_docx_path, thread_id)
+        template_path = resolve_existing_file("template_docx_path", template_docx_path, thread_id)
+        final_path = resolve_output_file(final_docx_path, thread_id)
+        report_path = resolve_output_file(report_json_path, thread_id) if report_json_path else None
+        result = _service().run_pipeline_with_repair(
             str(source_path),
             str(template_path),
             str(final_path),

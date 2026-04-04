@@ -12,6 +12,7 @@ def build_rule_bundle(template_docx_path: str, template_outline, template_struct
     return RuleBundle(
         template_docx_path=template_docx_path,
         template_outline=template_outline,
+        target_outline=list(template_outline),
         heading_levels={item.normalized_title: item.level for item in template_outline},
         style_profile=style_profile,
         required_sections=[item.normalized_title for item in template_outline],
@@ -49,8 +50,9 @@ def infer_role_slots(template_structure: dict[str, Any]) -> dict[str, Any]:
                 "table_index": block.get("table_index"),
                 "section_path": block.get("section_path", []),
             }
-        if paragraph_role and f"paragraph:{paragraph_role}" not in role_slots:
-            role_slots[f"paragraph:{paragraph_role}"] = {
+        paragraph_key = f"paragraph:{paragraph_role}" if paragraph_role else None
+        if paragraph_key and paragraph_key not in role_slots:
+            role_slots[paragraph_key] = {
                 "style_name": block.get("style_name"),
                 "block_type": block.get("block_type"),
                 "paragraph_index": block.get("paragraph_index"),
@@ -62,7 +64,10 @@ def infer_role_slots(template_structure: dict[str, Any]) -> dict[str, Any]:
 def build_template_interpret(template_outline, template_structure: dict[str, Any]) -> dict[str, Any]:
     front_matter_titles = [item.title for item in template_outline if item.level == 1][:3]
     outline_titles = [item.title for item in template_outline]
-    references_required = any("参考文献" in title or "reference" in title.lower() for title in outline_titles)
+    references_required = any(
+        ("参考文献" in title) or ("reference" in title.lower()) or ("bibliography" in title.lower())
+        for title in outline_titles
+    )
     return {
         "front_matter": {
             "expected_titles": front_matter_titles,
@@ -95,6 +100,20 @@ def build_section_styles(template_outline, style_profile: dict[str, Any]) -> lis
     return result
 
 
+def _detect_section_role(item) -> str:
+    lowered = item.title.lower()
+    if "参考文献" in item.title or lowered in {"references", "bibliography"}:
+        return "references"
+    if "appendix" in lowered or "附录" in item.title:
+        return "appendix"
+    if item.order <= 3 and (
+        any(token in lowered for token in ("abstract", "keywords"))
+        or any(token in item.title for token in ("摘要", "关键词"))
+    ):
+        return "front_matter"
+    return "body"
+
+
 def build_section_element_style_map(template_outline, style_profile: dict[str, Any]) -> dict[str, Any]:
     heading_styles = style_profile.get("heading_profiles") or style_profile.get("heading_styles", {})
     body_profile = (style_profile.get("body_profiles") or {}).get("default") or style_profile.get("body_style", {})
@@ -104,22 +123,12 @@ def build_section_element_style_map(template_outline, style_profile: dict[str, A
     table_profiles = style_profile.get("table_profiles") or {}
     default_table_profile = next(iter(table_profiles.values()), {})
     section_layout_profiles = style_profile.get("section_layout_profiles") or []
-    result: dict[str, Any] = {}
     ordered_front_profiles = front_matter_profiles.get("ordered") or []
+    result: dict[str, Any] = {}
     for item in template_outline:
-        section_key = item.normalized_title
-        section_role = "body"
-        lowered = item.title.lower()
-        if "参考文献" in item.title or lowered == "references":
-            section_role = "references"
-        elif "appendix" in lowered or "附录" in item.title:
-            section_role = "appendix"
-        elif item.order <= 3 and any(token in lowered for token in ("abstract", "摘要", "keywords", "关键词")):
-            section_role = "front_matter"
-        table_cell_profile = {}
+        section_role = _detect_section_role(item)
         body_row_cells = ((default_table_profile or {}).get("body_row_profile") or {}).get("cells") or []
-        if body_row_cells:
-            table_cell_profile = body_row_cells[0]
+        table_cell_profile = body_row_cells[0] if body_row_cells else {}
         element_styles = {
             "heading": heading_styles.get(str(item.level), {}),
             "subheading_level_2": heading_styles.get("2", heading_styles.get(str(item.level), {})),
@@ -139,11 +148,12 @@ def build_section_element_style_map(template_outline, style_profile: dict[str, A
             element_styles.update(
                 {
                     "front_matter_title": ordered_front_profiles[0] if len(ordered_front_profiles) > 0 else front_matter_profiles.get("default", {}),
+                    "front_matter_author_block": ordered_front_profiles[1] if len(ordered_front_profiles) > 1 else front_matter_profiles.get("default", {}),
                     "front_matter_abstract": ordered_front_profiles[1] if len(ordered_front_profiles) > 1 else front_matter_profiles.get("default", {}),
                     "front_matter_keywords": ordered_front_profiles[2] if len(ordered_front_profiles) > 2 else front_matter_profiles.get("default", {}),
                 }
             )
-        result[section_key] = {
+        result[item.normalized_title] = {
             "section_id": item.id,
             "normalized_title": item.normalized_title,
             "title": item.title,

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from typing import Any
 
+from ..models.contracts import RepairPlan
 from .utils import normalize_title
 
 
@@ -163,6 +164,141 @@ def collect_section_style_mismatches(rule_bundle, section_results) -> tuple[list
     return section_style_mismatches, element_style_mismatches
 
 
+def collect_content_integrity_warnings(section_results) -> tuple[list[dict[str, Any]], list[str], list[str]]:
+    warnings: list[dict[str, Any]] = []
+    unmapped_source_blocks: list[str] = []
+    all_consumed: list[str] = []
+    for result in section_results:
+        all_consumed.extend(result.consumed_source_block_keys or [])
+        if result.unmapped_source_block_keys:
+            warnings.append(
+                {
+                    "kind": "unmapped_source_blocks",
+                    "section_title": result.template_section_title,
+                    "unmapped_source_block_keys": list(result.unmapped_source_block_keys),
+                }
+            )
+            unmapped_source_blocks.extend(result.unmapped_source_block_keys)
+        if not result.content_integrity_pass:
+            warnings.append(
+                {
+                    "kind": "content_integrity_failed",
+                    "section_title": result.template_section_title,
+                    "description": "section processing reported unmapped source content",
+                }
+            )
+    seen: set[str] = set()
+    duplicate_mapped_blocks: list[str] = []
+    for key in all_consumed:
+        if key in seen and key not in duplicate_mapped_blocks:
+            duplicate_mapped_blocks.append(key)
+        seen.add(key)
+    if duplicate_mapped_blocks:
+        warnings.append(
+            {
+                "kind": "duplicate_mapped_blocks",
+                "duplicate_mapped_blocks": duplicate_mapped_blocks,
+            }
+        )
+    return warnings, sorted(set(unmapped_source_blocks)), duplicate_mapped_blocks
+
+
+def collect_block_mapping_warnings(section_results) -> list[dict[str, Any]]:
+    warnings: list[dict[str, Any]] = []
+    for result in section_results:
+        if result.block_mapping_warnings:
+            warnings.extend(result.block_mapping_warnings)
+        summary = result.block_mapping_summary or {}
+        if summary.get("empty_mapping") and result.consumed_source_block_keys:
+            warnings.append(
+                {
+                    "kind": "block_mapping_summary_conflict",
+                    "section_title": result.template_section_title,
+                    "description": "block mapping summary reported empty mapping despite consumed source blocks",
+                }
+            )
+    return warnings
+
+
+def collect_mapping_warnings(section_results) -> list[dict[str, Any]]:
+    warnings: list[dict[str, Any]] = []
+    append_sections = [result.template_section_title for result in section_results if result.source_mapping_kind == "source_only_append"]
+    if append_sections:
+        warnings.append(
+            {
+                "kind": "source_only_appended_sections",
+                "sections": append_sections,
+                "description": "some source sections could not map to template chapters and were appended to target outline",
+            }
+        )
+    return warnings
+
+
+def build_repair_candidates(
+    *,
+    missing_sections: list[str],
+    section_style_mismatches: list[dict[str, Any]],
+    layout_warnings: list[dict[str, Any]],
+    pagination_warnings: list[dict[str, Any]],
+    section_break_warnings: list[dict[str, Any]],
+    content_integrity_warnings: list[dict[str, Any]],
+    block_mapping_warnings: list[dict[str, Any]],
+    mapping_warnings: list[dict[str, Any]],
+) -> tuple[list[RepairPlan], str]:
+    plans: list[RepairPlan] = []
+    for title in missing_sections:
+        plans.append(
+            RepairPlan(
+                issue_kind="missing_section",
+                owner_agent="FlowSchedulerAgent",
+                target_section_title=title,
+                repair_action="rebuild_target_outline",
+                reason="template-required section is missing in final output",
+                retry_scope="target_outline",
+            )
+        )
+    for mismatch in section_style_mismatches:
+        plans.append(
+            RepairPlan(
+                issue_kind="section_style_mismatch",
+                owner_agent="SectionProcessorAgent",
+                target_section_title=mismatch.get("section_title"),
+                repair_action="reapply_section_styles",
+                reason="expected chapter element style slots were not applied",
+                retry_scope="single_section",
+            )
+        )
+    if content_integrity_warnings or block_mapping_warnings or mapping_warnings:
+        plans.append(
+            RepairPlan(
+                issue_kind="content_mapping_issue",
+                owner_agent="FlowSchedulerAgent",
+                repair_action="remap_section_blocks",
+                reason="source blocks appear unmapped, duplicated, or weakly attached to target sections",
+                retry_scope="mapping",
+            )
+        )
+    if layout_warnings or pagination_warnings or section_break_warnings:
+        plans.append(
+            RepairPlan(
+                issue_kind="layout_or_pagination_issue",
+                owner_agent="AggregationReviewAgent",
+                repair_action="normalize_section_flow",
+                reason="merged document layout or pagination drifted from template expectations",
+                retry_scope="merge_only",
+            )
+        )
+    if not plans:
+        return [], "no_repair_needed"
+    if any(plan.retry_scope == "mapping" for plan in plans):
+        return plans, "repair_mapping_then_reprocess_sections"
+    if any(plan.retry_scope == "single_section" for plan in plans):
+        return plans, "repair_sections_then_reaggregate"
+    if any(plan.retry_scope == "merge_only" for plan in plans):
+        return plans, "rerun_merge_and_layout_normalization"
+    return plans, "rerun_target_outline_and_aggregate"
+
+
 def build_aggregate_report(executor, final_docx_path: str, rule_bundle, section_results) -> dict[str, Any]:
     final_outline = executor.extract_outline(final_docx_path)
     final_structure = executor.extract_structure(final_docx_path, outline=final_outline)
@@ -174,10 +310,23 @@ def build_aggregate_report(executor, final_docx_path: str, rule_bundle, section_
     excess_blank_space_warnings = collect_excess_blank_space_warnings(final_structure)
     pagination_warnings = collect_pagination_warnings(section_results, rule_bundle.layout_profile, final_structure)
     section_style_mismatches, element_style_mismatches = collect_section_style_mismatches(rule_bundle, section_results)
+    content_integrity_warnings, unmapped_source_blocks, duplicate_mapped_blocks = collect_content_integrity_warnings(section_results)
+    block_mapping_warnings = collect_block_mapping_warnings(section_results)
+    mapping_warnings = collect_mapping_warnings(section_results)
     front_signature = front_matter_signature(final_structure)
     front_matter_warnings: list[dict[str, Any]] = []
     if rule_bundle.interpret.get("front_matter", {}).get("required") and not front_signature:
         front_matter_warnings.append({"kind": "front_matter_missing", "description": "front matter is missing after aggregation"})
+    repair_candidates, recommended_next_step = build_repair_candidates(
+        missing_sections=missing_sections,
+        section_style_mismatches=section_style_mismatches,
+        layout_warnings=layout_warnings,
+        pagination_warnings=pagination_warnings,
+        section_break_warnings=section_break_warnings,
+        content_integrity_warnings=content_integrity_warnings,
+        block_mapping_warnings=block_mapping_warnings,
+        mapping_warnings=mapping_warnings,
+    )
     return {
         "final_docx_path": final_docx_path,
         "missing_sections": missing_sections,
@@ -190,6 +339,13 @@ def build_aggregate_report(executor, final_docx_path: str, rule_bundle, section_
         "section_break_warnings": section_break_warnings,
         "excess_blank_space_warnings": excess_blank_space_warnings,
         "front_matter_warnings": front_matter_warnings,
+        "content_integrity_warnings": content_integrity_warnings,
+        "block_mapping_warnings": block_mapping_warnings,
+        "unmapped_source_blocks": unmapped_source_blocks,
+        "duplicate_mapped_blocks": duplicate_mapped_blocks,
+        "mapping_warnings": mapping_warnings,
+        "repair_candidates": [item.to_dict() for item in repair_candidates],
+        "recommended_next_step": recommended_next_step,
         "outline_pass": outline_pass,
         "processing_stats": {
             "section_count": len(section_results),

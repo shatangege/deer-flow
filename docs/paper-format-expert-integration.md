@@ -97,8 +97,43 @@ To verify the `paper` container after `docker compose ... up`, run [verify-paper
 
 ## Active Tool Surface
 
+- `run_paper_pipeline_with_repair`
 - `run_paper_pipeline`
 - `extract_paper_template_rules`
 - `split_paper_sections`
 - `process_paper_section`
 - `aggregate_paper_sections`
+
+## Default Execution Recommendation
+
+For normal formatting requests, prefer:
+
+- `run_paper_pipeline_with_repair`
+
+Use `run_paper_pipeline` only when you explicitly want a single-pass run without the follow-up repair cycle.
+
+## Repair Cycle Result Fields
+
+The repaired high-level tool returns the normal pipeline payload plus repair-cycle metadata:
+
+- `repair_attempted`
+  - whether one automatic repair cycle actually ran
+- `repair_scope`
+  - `none`, `single_section`, `merge_only`, `mapping`, or `global`
+- `recommended_next_step`
+  - the preferred next action for the caller
+- `repair_candidates`
+  - structured repair suggestions with:
+    - `issue_kind`
+    - `owner_agent`
+    - `target_section_title`
+    - `repair_action`
+    - `retry_scope`
+
+Recommended caller behavior:
+
+- If `outline_pass=true` and `recommended_next_step=no_repair_needed`, treat the output as the stable one-shot result.
+- If `repair_attempted=true`, surface that explicitly in UI or logs so users know one repair pass was already applied.
+- If `repair_scope=merge_only`, focus investigation on aggregation and pagination.
+- If `repair_scope=single_section`, prefer section-level restaging before rerunning the full pipeline.
+- If `repair_scope=mapping` or `global`, investigate template/target-outline alignment before retrying more formatting passes.

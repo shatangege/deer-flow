@@ -62,7 +62,7 @@ def _short_heading_like_text_rule(context: HeadingDetectionContext) -> int | Non
         return None
     if len(context.text) > 80 or len(words) > 12:
         return None
-    if any(mark in context.text for mark in (".", "!", "?", ";", "。", "！", "？", "；")):
+    if any(mark in context.text for mark in (".", "!", "?", ";", "。", "；", "：", "，")):
         return None
     if context.text.strip() == context.text.strip().title():
         return 1
@@ -93,7 +93,7 @@ def _starts_with_any(*prefixes: str) -> Callable[[str, str], bool]:
 
 DEFAULT_SECTION_ROLE_RULES: tuple[TextRoleRule, ...] = (
     TextRoleRule(name="abstract", role="abstract", predicate=_contains_any("abstract", "摘要")),
-    TextRoleRule(name="references", role="references", predicate=_contains_any("reference", "references", "参考文献")),
+    TextRoleRule(name="references", role="references", predicate=_contains_any("reference", "references", "bibliography", "参考文献")),
     TextRoleRule(name="appendix", role="appendix", predicate=_contains_any("appendix", "附录")),
 )
 
@@ -101,7 +101,7 @@ DEFAULT_SECTION_ROLE_RULES: tuple[TextRoleRule, ...] = (
 DEFAULT_PARAGRAPH_ROLE_RULES: tuple[TextRoleRule, ...] = (
     TextRoleRule(name="figure-caption", role="caption_figure", predicate=_starts_with_any("figure", "fig", "图")),
     TextRoleRule(name="table-caption", role="caption_table", predicate=_starts_with_any("table", "表")),
-    TextRoleRule(name="reference-heading", role="reference_heading", predicate=_contains_any("references", "reference", "参考文献")),
+    TextRoleRule(name="reference-heading", role="reference_heading", predicate=_contains_any("references", "reference", "bibliography", "参考文献")),
 )
 
 
@@ -140,11 +140,7 @@ def detect_heading_level(executor, paragraph, text: str, rules: tuple[HeadingLev
     return None
 
 
-def classify_text_role(
-    text: str,
-    rules: tuple[TextRoleRule, ...],
-    default_role: str | None = None,
-) -> str | None:
+def classify_text_role(text: str, rules: tuple[TextRoleRule, ...], default_role: str | None = None) -> str | None:
     normalized_text = normalize_title(text)
     for rule in rules:
         if rule.predicate(text, normalized_text):

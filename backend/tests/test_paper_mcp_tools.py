@@ -33,6 +33,7 @@ def test_paper_mcp_registers_low_level_tools():
         "process_paper_section",
         "aggregate_paper_sections",
         "run_paper_pipeline",
+        "run_paper_pipeline_with_repair",
     }
     assert expected.issubset(tool_names)
 
