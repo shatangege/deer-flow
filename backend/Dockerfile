@@ -20,8 +20,6 @@ ARG NODESOURCE_BASE_URL=https://deb.nodesource.com
 ARG UV_DEFAULT_INDEX
 
 ENV UV_LINK_MODE=copy
-ENV DOTNET_ROOT=/app/custom_agents/formatter_paper/.dotnet
-ENV PATH="${DOTNET_ROOT}:${PATH}"
 
 # Point apt at a faster mirror when configured.
 RUN if [ -n "${APT_MIRROR}" ]; then \
@@ -33,33 +31,43 @@ RUN if [ -n "${APT_MIRROR}" ]; then \
     fi
 
 # Install system dependencies + Node.js (provides npx for MCP servers).
-RUN apt-get update && apt-get install -y \
-    curl \
-    build-essential \
-    gnupg \
-    ca-certificates \
-    libexpat1 \
-    libicu72 \
-    libfontconfig1 \
-    libfreetype6 \
-    libpng16-16 \
-    libjpeg62-turbo \
-    libharfbuzz0b \
-    libglib2.0-0 \
-    libstdc++6 \
-    libuuid1 \
-    libx11-6 \
-    libxau6 \
-    libxcb1 \
-    libxext6 \
-    libxrender1 \
-    zlib1g \
-    && mkdir -p /etc/apt/keyrings \
-    && curl -fsSL "${NODESOURCE_BASE_URL}/gpgkey/nodesource-repo.gpg.key" | gpg --dearmor -o /etc/apt/keyrings/nodesource.gpg \
-    && echo "deb [signed-by=/etc/apt/keyrings/nodesource.gpg] ${NODESOURCE_BASE_URL}/node_${NODE_MAJOR}.x nodistro main" > /etc/apt/sources.list.d/nodesource.list \
-    && apt-get update \
-    && apt-get install -y nodejs \
-    && rm -rf /var/lib/apt/lists/*
+RUN sh -ec '\
+      apt_update() { \
+        attempt=1; \
+        while [ "$attempt" -le 5 ]; do \
+          apt-get update -o Acquire::Retries=5 && return 0; \
+          sleep $((attempt * 2)); \
+          attempt=$((attempt + 1)); \
+        done; \
+        return 1; \
+      }; \
+      apt_update && apt-get install -y \
+        curl \
+        build-essential \
+        gnupg \
+        ca-certificates \
+        libexpat1 \
+        libicu72 \
+        libfontconfig1 \
+        libfreetype6 \
+        libpng16-16 \
+        libjpeg62-turbo \
+        libharfbuzz0b \
+        libglib2.0-0 \
+        libstdc++6 \
+        libuuid1 \
+        libx11-6 \
+        libxau6 \
+        libxcb1 \
+        libxext6 \
+        libxrender1 \
+        zlib1g \
+      && mkdir -p /etc/apt/keyrings \
+      && curl -fsSL "${NODESOURCE_BASE_URL}/gpgkey/nodesource-repo.gpg.key" | gpg --dearmor -o /etc/apt/keyrings/nodesource.gpg \
+      && echo "deb [signed-by=/etc/apt/keyrings/nodesource.gpg] ${NODESOURCE_BASE_URL}/node_${NODE_MAJOR}.x nodistro main" > /etc/apt/sources.list.d/nodesource.list \
+      && apt_update \
+      && apt-get install -y nodejs \
+      && rm -rf /var/lib/apt/lists/*'
 
 # Install Docker CLI (for DooD: allows starting sandbox containers via host Docker socket).
 COPY --from=docker-cli /usr/local/bin/docker /usr/local/bin/docker
@@ -78,20 +86,9 @@ COPY backend/packages/harness/pyproject.toml /app/backend/packages/harness/pypro
 RUN --mount=type=cache,target=/root/.cache/uv \
     sh -c "if [ -n \"${UV_DEFAULT_INDEX}\" ]; then export UV_DEFAULT_INDEX=\"${UV_DEFAULT_INDEX}\"; fi; cd backend && uv sync"
 
-# Preinstall formatter runtime support into the same interpreter environment used by Deer Flow/MCP.
-# Keep this before source COPY so normal code edits do not invalidate the pythonnet layer.
-RUN mkdir -p /app/custom_agents/formatter_paper/.dotnet \
-    && sh -c "if [ -n \"${UV_DEFAULT_INDEX}\" ]; then export UV_DEFAULT_INDEX=\"${UV_DEFAULT_INDEX}\"; fi; cd /app/backend && uv pip install --python .venv/bin/python pythonnet"
-
-# Copy backend and formatter source code after dependency install.
+# Copy backend and custom agent source code after dependency install.
 COPY backend ./backend
 COPY custom_agents ./custom_agents
-
-# Optional NuGet-style layout: native assets only under lib/linux-x64/ (not in git; add locally if needed).
-RUN if [ -d /app/custom_agents/formatter_paper/lib/linux-x64 ]; then \
-      cp -a /app/custom_agents/formatter_paper/lib/linux-x64/. /app/custom_agents/formatter_paper/lib/ && \
-      rm -rf /app/custom_agents/formatter_paper/lib/linux-x64; \
-    fi
 
 EXPOSE 8001 2024
 

@@ -18,22 +18,22 @@
 # Access: http://localhost:2026
 
 services:
-  formatter-paper:
+  paper:
     build:
       context: ../
-      dockerfile: custom_agents/formatter_paper/Dockerfile
+      dockerfile: custom_agents/paper/Dockerfile
       args:
         APT_MIRROR: ${APT_MIRROR:-mirrors.aliyun.com}
-        PYTHON_IMAGE: ${FORMATTER_PAPER_PYTHON_IMAGE:-python:3.12-slim-bookworm}
-        DOTNET_IMAGE: ${FORMATTER_PAPER_DOTNET_IMAGE:-mcr.microsoft.com/dotnet/runtime:8.0-bookworm-slim}
-    image: ${FORMATTER_PAPER_IMAGE:-formatter-paper-mcp:linux-dotnet8-python312}
-    container_name: deer-flow-formatter-paper
+        PYTHON_IMAGE: ${PAPER_PYTHON_IMAGE:-python:3.12-slim-bookworm}
+        DOTNET_IMAGE: ${PAPER_DOTNET_IMAGE:-mcr.microsoft.com/dotnet/runtime:8.0-bookworm-slim}
+    image: ${PAPER_IMAGE:-paper-agent-mcp:linux-dotnet8-python312}
+    container_name: deer-flow-paper
     volumes:
-      - ../custom_agents/formatter_paper/lib/Aspose.Words.dll:/opt/formatter-paper/managed/Aspose.Words.dll:ro
-      - ../custom_agents/formatter_paper/lib/SkiaSharp.dll:/opt/formatter-paper/managed/SkiaSharp.dll:ro
-      - ../custom_agents/formatter_paper/lib/System.Text.Encoding.CodePages.dll:/opt/formatter-paper/managed/System.Text.Encoding.CodePages.dll:ro
-      - ../custom_agents/formatter_paper/lib/runtimeconfig.json:/opt/formatter-paper/managed/runtimeconfig.json:ro
-      - ../Aspose.Total.NET.lic:/opt/formatter-paper/license/Aspose.Total.NET.lic:ro
+      - ../custom_agents/paper/lib/Aspose.Words.dll:/opt/paper-agent/managed/Aspose.Words.dll:ro
+      - ../custom_agents/paper/lib/SkiaSharp.dll:/opt/paper-agent/managed/SkiaSharp.dll:ro
+      - ../custom_agents/paper/lib/System.Text.Encoding.CodePages.dll:/opt/paper-agent/managed/System.Text.Encoding.CodePages.dll:ro
+      - ../custom_agents/paper/lib/runtimeconfig.json:/opt/paper-agent/managed/runtimeconfig.json:ro
+      - ../custom_agents/paper/lib/Aspose.Total.NET.lic:/opt/paper-agent/license/Aspose.Total.NET.lic:ro
       # Same host paths as gateway: skills + thread data (sandbox uses /mnt/skills; gateway uses /app/skills).
       - ../skills:/app/skills:ro
       - ../skills:/mnt/skills:ro
@@ -44,21 +44,21 @@ services:
       - DEER_FLOW_HOME=/app/backend/.deer-flow
       - THREADS_ROOT=/mnt/threads
       # Optional: formatter_mcp_server maps /mnt/user-data/... -> THREADS_ROOT/<id>/user-data/...
-      - FORMATTER_PAPER_THREAD_ID=${FORMATTER_PAPER_THREAD_ID:-}
-      - FORMATTER_PAPER_HTTP_HOST=0.0.0.0
-      - FORMATTER_PAPER_HTTP_PORT=8765
-      - FORMATTER_PAPER_HTTP_PATH=/mcp
-      - FORMATTER_PAPER_PUBLIC_BASE_URL=${FORMATTER_PAPER_PUBLIC_BASE_URL:-http://formatter-paper:8765}
+      - PAPER_THREAD_ID=${PAPER_THREAD_ID:-}
+      - PAPER_HTTP_HOST=0.0.0.0
+      - PAPER_HTTP_PORT=8766
+      - PAPER_HTTP_PATH=/mcp
+      - PAPER_PUBLIC_BASE_URL=${PAPER_PUBLIC_BASE_URL:-http://paper:8766}
       - MODELSCOPE_API_KEY=${MODELSCOPE_API_KEY:-}
       - OPENAI_API_KEY=${OPENAI_API_KEY:-}
-      - ASPOSE_MANAGED_DIR=/opt/formatter-paper/managed
-      - ASPOSE_NATIVE_DIR=/opt/formatter-paper/native
-      - ASPOSE_LICENSE_PATH=/opt/formatter-paper/license/Aspose.Total.NET.lic
-      - ASPOSE_LIBS=/opt/formatter-paper/managed
+      - ASPOSE_MANAGED_DIR=/opt/paper-agent/managed
+      - ASPOSE_NATIVE_DIR=/opt/paper-agent/native
+      - ASPOSE_LICENSE_PATH=/opt/paper-agent/license/Aspose.Total.NET.lic
+      - ASPOSE_LIBS=/opt/paper-agent/managed
     env_file:
       - ../.env
     ports:
-      - "${FORMATTER_PAPER_PORT:-8765}:8765"
+      - "${PAPER_PORT:-8766}:8766"
     networks:
       - deer-flow-dev
     restart: unless-stopped
@@ -186,7 +186,7 @@ services:
     container_name: deer-flow-gateway
     command: sh -c "cd backend && PYTHONPATH=. uv run uvicorn app.gateway.app:app --host 0.0.0.0 --port 8001 > /app/logs/gateway.log 2>&1"
     depends_on:
-      - formatter-paper
+      - paper
     volumes:
       - ../backend/:/app/backend/
       - ../custom_agents/:/app/custom_agents/
@@ -195,8 +195,6 @@ services:
       - gateway-venv:/app/backend/.venv
       - ../config.yaml:/app/config.yaml
       - ../extensions_config.json:/app/extensions_config.json
-      - ../Aspose.Total.NET.lic:/app/backend/Aspose.Total.NET.lic:ro
-      - ../custom_agents/formatter_paper/lib:/app/custom_agents/formatter_paper/lib:ro
       - ../skills:/app/skills
       - ../logs:/app/logs
       # Mount uv cache for faster dependency installation
@@ -219,12 +217,9 @@ services:
     working_dir: /app
     environment:
       - CI=true
-      # Align virtual-path resolution with formatter-paper (.deer-flow mount); overrides stray DEER_FLOW_HOME in .env
       - DEER_FLOW_HOME=/app/backend/.deer-flow
-      - FORMATTER_PAPER_MCP_URL=${FORMATTER_PAPER_MCP_URL:-http://formatter-paper:8765/mcp}
-      - ASPOSE_LIBS=/app/custom_agents/formatter_paper/lib
-      - DOTNET_ROOT=/app/custom_agents/formatter_paper/.dotnet
-      - ASPOSE_LICENSE_PATH=/app/backend/Aspose.Total.NET.lic
+      - PAPER_MCP_URL=${PAPER_MCP_URL:-http://paper:8766/mcp}
+      - ASPOSE_LICENSE_PATH=/app/custom_agents/paper/lib/Aspose.Total.NET.lic
       - DEER_FLOW_CHANNELS_LANGGRAPH_URL=${DEER_FLOW_CHANNELS_LANGGRAPH_URL:-http://langgraph:2024}
       - DEER_FLOW_CHANNELS_GATEWAY_URL=${DEER_FLOW_CHANNELS_GATEWAY_URL:-http://gateway:8001}
       - DEER_FLOW_HOST_BASE_DIR=${DEER_FLOW_ROOT}/backend/.deer-flow
@@ -255,7 +250,7 @@ services:
     container_name: deer-flow-langgraph
     command: sh -c "cd backend && uv run langgraph dev --no-browser --allow-blocking --no-reload --host 0.0.0.0 --port 2024 > /app/logs/langgraph.log 2>&1"
     depends_on:
-      - formatter-paper
+      - paper
     volumes:
       - ../backend/:/app/backend/
       - ../custom_agents/:/app/custom_agents/
@@ -264,8 +259,6 @@ services:
       - langgraph-venv:/app/backend/.venv
       - ../config.yaml:/app/config.yaml
       - ../extensions_config.json:/app/extensions_config.json
-      - ../Aspose.Total.NET.lic:/app/backend/Aspose.Total.NET.lic:ro
-      - ../custom_agents/formatter_paper/lib:/app/custom_agents/formatter_paper/lib:ro
       - ../skills:/app/skills
       - ../logs:/app/logs
       # Mount uv cache for faster dependency installation
@@ -290,10 +283,8 @@ services:
       - CI=true
       - DEER_FLOW_HOME=/app/backend/.deer-flow
       - MODELSCOPE_API_KEY=${MODELSCOPE_API_KEY:-}
-      - FORMATTER_PAPER_MCP_URL=${FORMATTER_PAPER_MCP_URL:-http://formatter-paper:8765/mcp}
-      - ASPOSE_LIBS=/app/custom_agents/formatter_paper/lib
-      - DOTNET_ROOT=/app/custom_agents/formatter_paper/.dotnet
-      - ASPOSE_LICENSE_PATH=/app/backend/Aspose.Total.NET.lic
+      - PAPER_MCP_URL=${PAPER_MCP_URL:-http://paper:8766/mcp}
+      - ASPOSE_LICENSE_PATH=/app/custom_agents/paper/lib/Aspose.Total.NET.lic
       - DEER_FLOW_HOST_BASE_DIR=${DEER_FLOW_ROOT}/backend/.deer-flow
       - DEER_FLOW_HOST_SKILLS_PATH=${DEER_FLOW_ROOT}/skills
       - DEER_FLOW_SANDBOX_HOST=host.docker.internal

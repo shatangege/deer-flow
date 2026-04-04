@@ -1,0 +1,4 @@
+pythonnet
+mcp>=1.13.1
+starlette>=0.46.2
+uvicorn[standard]>=0.34.0

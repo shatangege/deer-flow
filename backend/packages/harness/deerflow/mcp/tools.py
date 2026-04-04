@@ -20,7 +20,7 @@ from deerflow.mcp.path_mapping import build_path_mapping_tool_interceptor
 
 logger = logging.getLogger(__name__)
 _DEFAULT_MCP_INIT_TIMEOUT_SECONDS = 20.0
-_THREAD_ID_INJECTION_SERVER_PREFIXES = ("formatter-paper_",)
+_THREAD_ID_INJECTION_SERVER_PREFIXES = ("paper_",)
 
 # Global thread pool for sync tool invocation in async environments
 _SYNC_TOOL_EXECUTOR = concurrent.futures.ThreadPoolExecutor(max_workers=10, thread_name_prefix="mcp-sync-tool")
