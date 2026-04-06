@@ -39,15 +39,15 @@ def split_heading_text_parts(executor, text):
     return ("", rendered_text, "")
 
 
-def replace_heading_text_with_template_runs(executor, paragraph, text, document):
+def replace_heading_text_with_template_runs(executor, paragraph, text, document, profile=None):
     meaningful = meaningful_runs(executor, paragraph)
     if len(meaningful) < 2:
-        replace_paragraph_text(executor, paragraph, text, document)
+        replace_paragraph_text(executor, paragraph, text, document, profile=profile)
         return False
 
     prefix, body, suffix = split_heading_text_parts(executor, text)
     if not body:
-        replace_paragraph_text(executor, paragraph, text, document)
+        replace_paragraph_text(executor, paragraph, text, document, profile=profile)
         return False
 
     segments = [prefix, body, suffix] if len(meaningful) >= 3 else [prefix, body + suffix]
@@ -63,6 +63,6 @@ def replace_heading_text_with_template_runs(executor, paragraph, text, document)
         else:
             run.Remove()
     if used_count == 0:
-        replace_paragraph_text(executor, paragraph, text, document)
+        replace_paragraph_text(executor, paragraph, text, document, profile=profile)
         return False
     return True

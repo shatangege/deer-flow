@@ -5,14 +5,28 @@ import json
 import os
 import shutil
 import subprocess
+import sys
 import tempfile
 import urllib.request
 import zipfile
 from datetime import datetime
+from time import perf_counter
 
 
 def _runtime_framework_name() -> str:
     return "Microsoft.NETCore.App" if os.name != "nt" else "Microsoft.WindowsDesktop.App"
+
+
+def _diag_enabled() -> bool:
+    return os.environ.get("PAPER_ASPOSE_DEBUG", "").strip().lower() in {"1", "true", "yes", "on"}
+
+
+def _diag_log(message: str, **fields: object) -> None:
+    if not _diag_enabled():
+        return
+    payload = {"message": message, **fields}
+    sys.stderr.write(f"[paper-aspose] {json.dumps(payload, ensure_ascii=False)}\n")
+    sys.stderr.flush()
 
 
 def ensure_runtime_config(runtime_host) -> str:
@@ -93,18 +107,24 @@ def _bootstrap_linux_native_dependency(runtime_host) -> str | None:
     native_dir = os.path.join(cache_root, "linux-x64")
     native_path = os.path.join(native_dir, "libSkiaSharp.so")
     if os.path.exists(native_path):
+        runtime_host.last_native_bootstrap_error = None
         return native_path
     os.makedirs(native_dir, exist_ok=True)
     package_path = os.path.join(cache_root, f"{package_lower}.{version_lower}.nupkg")
     try:
+        _diag_log("bootstrap_linux_native_dependency:start", url=download_url, target_dir=native_dir)
         if not os.path.exists(package_path):
             with urllib.request.urlopen(download_url, timeout=30) as response, open(package_path, "wb") as handle:
                 shutil.copyfileobj(response, handle)
         with zipfile.ZipFile(package_path) as archive:
             with archive.open("runtimes/linux-x64/native/libSkiaSharp.so") as source, open(native_path, "wb") as target:
                 shutil.copyfileobj(source, target)
+        runtime_host.last_native_bootstrap_error = None
+        _diag_log("bootstrap_linux_native_dependency:done", native_path=native_path)
         return native_path if os.path.exists(native_path) else None
-    except Exception:
+    except Exception as exc:
+        runtime_host.last_native_bootstrap_error = str(exc)
+        _diag_log("bootstrap_linux_native_dependency:failed", error=str(exc), url=download_url)
         return None
 
 
@@ -132,9 +152,14 @@ def ensure_linux_native_available(runtime_host) -> None:
         return
     native_path = resolve_linux_native_path(runtime_host)
     if not os.path.exists(native_path):
+        detail = getattr(runtime_host, "last_native_bootstrap_error", None)
+        if detail:
+            raise RuntimeError(f"Missing Linux native dependency: {native_path}; bootstrap failed: {detail}")
         raise RuntimeError(f"Missing Linux native dependency: {native_path}")
     try:
+        _diag_log("load_linux_native_dependency:start", native_path=native_path)
         ctypes.CDLL(native_path, mode=getattr(ctypes, "RTLD_GLOBAL", 0))
+        _diag_log("load_linux_native_dependency:done", native_path=native_path)
     except OSError as exc:
         detail = str(exc)
         try:
@@ -198,9 +223,20 @@ def prepare_native_probe_paths(runtime_host) -> None:
 
 
 def load_dependencies(runtime_host, caller_globals: dict[str, object]) -> None:
+    started = perf_counter()
+    _diag_log(
+        "load_dependencies:start",
+        managed_dir=runtime_host.managed_dir,
+        native_dir=runtime_host.native_dir,
+        license_path=runtime_host.license_path,
+        system=runtime_host.system,
+    )
     ensure_linux_native_available(runtime_host)
+    _diag_log("load_dependencies:after_native", elapsed_ms=round((perf_counter() - started) * 1000, 1), native_dir=runtime_host.native_dir)
     configure_local_dotnet(runtime_host)
+    _diag_log("load_dependencies:after_dotnet_env", elapsed_ms=round((perf_counter() - started) * 1000, 1), dotnet_root=os.environ.get("DOTNET_ROOT", ""))
     prepare_native_probe_paths(runtime_host)
+    _diag_log("load_dependencies:after_probe_paths", elapsed_ms=round((perf_counter() - started) * 1000, 1))
 
     if runtime_host.system == "windows" and hasattr(os, "add_dll_directory"):
         os.add_dll_directory(runtime_host.managed_dir)
@@ -210,13 +246,17 @@ def load_dependencies(runtime_host, caller_globals: dict[str, object]) -> None:
     import pythonnet
 
     runtime_config = ensure_runtime_config(runtime_host)
+    _diag_log("load_dependencies:pythonnet_load:start", runtime_config=runtime_config)
     pythonnet.load("coreclr", runtime_config=runtime_config)
+    _diag_log("load_dependencies:pythonnet_load:done", elapsed_ms=round((perf_counter() - started) * 1000, 1))
 
     import clr
 
+    _diag_log("load_dependencies:add_reference:start")
     clr.AddReference(os.path.join(runtime_host.managed_dir, "SkiaSharp.dll"))
     clr.AddReference(os.path.join(runtime_host.managed_dir, "Aspose.Words.dll"))
     clr.AddReference("System.Text.Encoding.CodePages")
+    _diag_log("load_dependencies:add_reference:done", elapsed_ms=round((perf_counter() - started) * 1000, 1))
 
     import System
     import System.Drawing as SystemDrawing
@@ -252,6 +292,7 @@ def load_dependencies(runtime_host, caller_globals: dict[str, object]) -> None:
 
     System.Text.Encoding.RegisterProvider(System.Text.CodePagesEncodingProvider.Instance)
     activate_license(runtime_host)
+    _diag_log("load_dependencies:done", elapsed_ms=round((perf_counter() - started) * 1000, 1), license_loaded=runtime_host.license_loaded)
 
 
 def activate_license(runtime_host) -> None:

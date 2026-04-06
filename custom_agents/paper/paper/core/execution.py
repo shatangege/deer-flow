@@ -1,8 +1,13 @@
 from __future__ import annotations
 
+import json
 import os
+import sys
+import urllib.error
+import urllib.request
 from dataclasses import dataclass
 from pathlib import Path
+from time import perf_counter
 from typing import Any
 
 from . import extraction
@@ -38,6 +43,40 @@ from ..models.contracts import AggregateReport, OutlineItem, RuleBundle, Section
 
 class PaperRuntimeError(RuntimeError):
     pass
+
+
+OUTLINE_MODE_ASPOSE_ONLY = "aspose_only"
+OUTLINE_MODE_ASPOSE_PLUS_LLM = "aspose_plus_llm"
+OUTLINE_MODE_LLM_ONLY = "llm_only"
+DEFAULT_OUTLINE_MODE = OUTLINE_MODE_ASPOSE_PLUS_LLM
+VALID_OUTLINE_MODES = {
+    OUTLINE_MODE_ASPOSE_ONLY,
+    OUTLINE_MODE_ASPOSE_PLUS_LLM,
+    OUTLINE_MODE_LLM_ONLY,
+}
+
+
+def _diag_enabled() -> bool:
+    return os.environ.get("PAPER_ASPOSE_DEBUG", "").strip().lower() in {"1", "true", "yes", "on"}
+
+
+def _diag_log(message: str, **fields: object) -> None:
+    if not _diag_enabled():
+        return
+    payload = {"message": message, **fields}
+    sys.stderr.write(f"[paper-execution] {payload}\n")
+    sys.stderr.flush()
+
+
+def _json_dumps(payload: Any) -> str:
+    return json.dumps(payload, ensure_ascii=False, separators=(",", ":"))
+
+
+def normalize_outline_mode(value: str | None) -> str:
+    normalized = str(value or DEFAULT_OUTLINE_MODE).strip().lower().replace("-", "_")
+    if normalized not in VALID_OUTLINE_MODES:
+        return DEFAULT_OUTLINE_MODE
+    return normalized
 
 
 def _resolve_existing_path(*candidates: Path) -> Path:
@@ -145,7 +184,9 @@ class AsposeExecutionAgent:
         self.replace_paragraph_text = lambda paragraph, text, document, profile=None, preserve_whitespace=False: replace_paragraph_text(
             self, paragraph, text, document, profile=profile, preserve_whitespace=preserve_whitespace
         )
-        self.replace_heading_text_with_template_runs = lambda paragraph, text, document: replace_heading_text_with_template_runs(self, paragraph, text, document)
+        self.replace_heading_text_with_template_runs = lambda paragraph, text, document, profile=None: replace_heading_text_with_template_runs(
+            self, paragraph, text, document, profile=profile
+        )
         self.apply_table_profile = lambda table, profile, document: apply_table_profile(self, table, profile, document)
         self.fit_table_within_section_width = lambda table, section, preferred_width=None, preferred_width_type=None, column_widths=None: fit_table_within_section_width(
             self, table, section, preferred_width=preferred_width, preferred_width_type=preferred_width_type, column_widths=column_widths
@@ -156,6 +197,8 @@ class AsposeExecutionAgent:
         if AsposeExecutionAgent._runtime_ready:
             self._bind_cached_runtime()
             return
+        started = perf_counter()
+        _diag_log("ensure_runtime:start", managed_dir=self.managed_dir, native_dir=self.native_dir)
         host = _RuntimeHost(
             script_dir=self.script_dir,
             managed_dir=self.managed_dir,
@@ -166,6 +209,7 @@ class AsposeExecutionAgent:
         try:
             load_dependencies(host, globals())
         except Exception as exc:
+            _diag_log("ensure_runtime:failed", error=str(exc), elapsed_ms=round((perf_counter() - started) * 1000, 1))
             raise PaperRuntimeError(str(exc)) from exc
         try:
             from Aspose.Words.Tables import PreferredWidth
@@ -179,12 +223,168 @@ class AsposeExecutionAgent:
         AsposeExecutionAgent._license_loaded = host.license_loaded
         self._bind_cached_runtime()
         AsposeExecutionAgent._runtime_ready = True
+        _diag_log("ensure_runtime:done", elapsed_ms=round((perf_counter() - started) * 1000, 1), license_loaded=host.license_loaded)
 
     def _bind_cached_runtime(self) -> None:
         for attr, value in AsposeExecutionAgent._runtime_exports.items():
             setattr(self, attr, value)
         self.PreferredWidth = AsposeExecutionAgent._preferred_width
         self.license_loaded = AsposeExecutionAgent._license_loaded
+
+    def _outline_llm_settings(self) -> dict[str, str] | None:
+        api_key = (os.getenv("PAPER_OUTLINE_LLM_API_KEY") or os.getenv("OPENAI_API_KEY") or "").strip()
+        model = (os.getenv("PAPER_OUTLINE_LLM_MODEL") or os.getenv("OPENAI_MODEL") or "gpt-4.1-mini").strip()
+        base_url = (os.getenv("PAPER_OUTLINE_LLM_BASE_URL") or os.getenv("OPENAI_BASE_URL") or "https://api.openai.com/v1").strip().rstrip("/")
+        if not api_key or not model:
+            return None
+        return {
+            "api_key": api_key,
+            "model": model,
+            "base_url": base_url,
+        }
+
+    def _build_outline_confirmation_prompt(
+        self,
+        template_docx_path: str,
+        outline_candidates: list[dict[str, Any]],
+        provisional_outline: list[OutlineItem],
+    ) -> str:
+        candidate_payload = [
+            {
+                "id": item.get("id"),
+                "title": item.get("title"),
+                "normalized_title": item.get("normalized_title"),
+                "candidate_level": item.get("candidate_level"),
+                "level": item.get("level"),
+                "source_paragraph_index": item.get("source_paragraph_index"),
+                "style_name": item.get("style_name"),
+                "page_index": item.get("page_index"),
+                "section_role": item.get("section_role"),
+                "paragraph_role": item.get("paragraph_role"),
+                "is_probable_caption": item.get("is_probable_caption"),
+                "is_probable_toc": item.get("is_probable_toc"),
+                "is_probable_appendix_heading": item.get("is_probable_appendix_heading"),
+                "path": item.get("path"),
+            }
+            for item in outline_candidates[:200]
+        ]
+        provisional_payload = [
+            {
+                "id": item.id,
+                "title": item.title,
+                "normalized_title": item.normalized_title,
+                "level": item.level,
+                "order": item.order,
+                "source_paragraph_index": item.source_paragraph_index,
+                "style_name": item.style_name,
+                "page_index": item.page_index,
+                "path": item.path,
+            }
+            for item in provisional_outline[:100]
+        ]
+        return (
+            "You are repairing a paper template outline extracted from a DOCX.\n"
+            "Your job is to return the true section outline, removing false positives like captions, tables of contents, running headers, and decorative text.\n"
+            "Prefer conservative corrections. Keep real section order. Preserve ids from candidates or provisional items when possible.\n"
+            "Return JSON only with shape: {\"confirmed_outline\":[{\"id\":\"...\",\"title\":\"...\",\"level\":1,\"source_paragraph_index\":0}]}\n"
+            "Do not include markdown fences.\n\n"
+            f"template_docx_path: {template_docx_path}\n"
+            f"outline_candidates: {_json_dumps(candidate_payload)}\n"
+            f"provisional_outline: {_json_dumps(provisional_payload)}\n"
+        )
+
+    def _extract_json_object(self, text: str) -> dict[str, Any] | None:
+        payload = (text or "").strip()
+        if not payload:
+            return None
+        try:
+            parsed = json.loads(payload)
+            return parsed if isinstance(parsed, dict) else None
+        except Exception:
+            pass
+        start = payload.find("{")
+        end = payload.rfind("}")
+        if start >= 0 and end > start:
+            snippet = payload[start : end + 1]
+            try:
+                parsed = json.loads(snippet)
+                return parsed if isinstance(parsed, dict) else None
+            except Exception:
+                return None
+        return None
+
+    def confirm_outline_with_llm(
+        self,
+        template_docx_path: str,
+        outline_candidates: list[dict[str, Any]],
+        provisional_outline: list[OutlineItem],
+    ) -> dict[str, Any] | None:
+        settings = self._outline_llm_settings()
+        if not settings or not outline_candidates:
+            _diag_log("confirm_outline_with_llm:skip", reason="missing_settings_or_candidates")
+            return None
+        prompt = self._build_outline_confirmation_prompt(template_docx_path, outline_candidates, provisional_outline)
+        request_payload = {
+            "model": settings["model"],
+            "temperature": 0,
+            "response_format": {"type": "json_object"},
+            "messages": [
+                {
+                    "role": "system",
+                    "content": "You correct DOCX outline extraction results. Output strict JSON only.",
+                },
+                {
+                    "role": "user",
+                    "content": prompt,
+                },
+            ],
+        }
+        request_url = f"{settings['base_url']}/chat/completions"
+        started = perf_counter()
+        _diag_log("confirm_outline_with_llm:start", model=settings["model"], base_url=settings["base_url"])
+        try:
+            request = urllib.request.Request(
+                request_url,
+                data=_json_dumps(request_payload).encode("utf-8"),
+                headers={
+                    "Content-Type": "application/json",
+                    "Authorization": f"Bearer {settings['api_key']}",
+                },
+                method="POST",
+            )
+            with urllib.request.urlopen(request, timeout=60) as response:
+                raw = response.read().decode("utf-8")
+        except urllib.error.HTTPError as exc:
+            detail = exc.read().decode("utf-8", errors="replace")
+            _diag_log(
+                "confirm_outline_with_llm:http_error",
+                status=exc.code,
+                error=detail[:1000],
+                elapsed_ms=round((perf_counter() - started) * 1000, 1),
+            )
+            return None
+        except Exception as exc:
+            _diag_log("confirm_outline_with_llm:failed", error=str(exc), elapsed_ms=round((perf_counter() - started) * 1000, 1))
+            return None
+        try:
+            response_payload = json.loads(raw)
+        except Exception:
+            _diag_log("confirm_outline_with_llm:invalid_json", raw_preview=raw[:1000], elapsed_ms=round((perf_counter() - started) * 1000, 1))
+            return None
+        content = ""
+        try:
+            choice = (response_payload.get("choices") or [])[0]
+            message = choice.get("message") or {}
+            content = message.get("content") or ""
+        except Exception:
+            content = ""
+        parsed = self._extract_json_object(content)
+        if not parsed:
+            _diag_log("confirm_outline_with_llm:unparseable_content", content_preview=str(content)[:1000], elapsed_ms=round((perf_counter() - started) * 1000, 1))
+            return None
+        confirmed_count = len(parsed.get("confirmed_outline", [])) if isinstance(parsed, dict) else 0
+        _diag_log("confirm_outline_with_llm:done", confirmed_count=confirmed_count, elapsed_ms=round((perf_counter() - started) * 1000, 1))
+        return parsed
 
     def _now(self) -> str:
         return now()
@@ -259,7 +459,11 @@ class AsposeExecutionAgent:
         path = str(Path(docx_path).expanduser().resolve())
         if not Path(path).exists():
             raise FileNotFoundError(path)
-        return self.Document(path)
+        started = perf_counter()
+        _diag_log("load_document:start", docx_path=path)
+        document = self.Document(path)
+        _diag_log("load_document:done", docx_path=path, elapsed_ms=round((perf_counter() - started) * 1000, 1))
+        return document
 
     def extract_outline(self, docx_path: str) -> list[OutlineItem]:
         return extraction.extract_outline(self, docx_path)
@@ -463,28 +667,54 @@ class AsposeExecutionAgent:
             mapping[item.id] = self.extract_section_document(source_docx_path, source_outline, item, str(output_root / f"{item.id}.docx"))
         return mapping
 
+    def _build_section_document_from_template(self, chunk: SectionChunk, rules: RuleBundle):
+        template_path = Path(rules.template_docx_path).expanduser().resolve()
+        if not template_path.exists():
+            document = self.Document()
+            document.RemoveAllChildren()
+            document.EnsureMinimum()
+            return document, document.FirstSection
+        template_document = self.load_document(str(template_path))
+        result_document = self.Document(str(template_path))
+        clear_all_section_bodies(self, result_document)
+        target_index = chunk.template_section_index if chunk.template_section_index is not None else max(chunk.order - 1, 0)
+        target_index = max(int(target_index), 0)
+        target_section = get_target_section(self, result_document, template_document, target_index)
+        sync_section_layout_from_template(
+            self,
+            result_document,
+            target_section,
+            template_document.Sections[min(target_index, template_document.Sections.Count - 1)],
+        )
+        section_usage = [False] * result_document.Sections.Count
+        section_usage[target_index] = True
+        remove_unused_sections(self, result_document, section_usage)
+        target_section = result_document.Sections[0]
+        copy_template_styles(self, result_document, str(template_path))
+        return result_document, target_section
+
     def rewrite_section_content(self, chunk: SectionChunk, rules: RuleBundle, output_docx_path: str) -> tuple[str, list[str], dict[str, Any]]:
         output_path = Path(output_docx_path).expanduser().resolve()
         output_path.parent.mkdir(parents=True, exist_ok=True)
-        document = self.Document()
-        document.RemoveAllChildren()
-        document.EnsureMinimum()
-        section = document.FirstSection
+        document, section = self._build_section_document_from_template(chunk, rules)
         content_actions: list[str] = []
         if chunk.source_section_docx_path and Path(chunk.source_section_docx_path).exists():
             source_section_doc = self.load_document(chunk.source_section_docx_path)
             src_section = source_section_doc.FirstSection
             nodes = src_section.Body.GetChildNodes(self.NodeType.Any, False)
             for idx in range(nodes.Count):
-                imported = document.ImportNode(nodes[idx], True, self.ImportFormatMode.KeepSourceFormatting)
+                imported = document.ImportNode(nodes[idx], True, self.ImportFormatMode.UseDestinationStyles)
                 section.Body.AppendChild(imported)
             content_actions.append(f"import_source_blocks:{len(chunk.source_block_keys)}")
         else:
             heading = section.Body.FirstParagraph or section.Body.AppendParagraph("")
-            heading.ParagraphFormat.StyleName = "Heading 1"
-            self.replace_paragraph_text(heading, chunk.template_title, document)
+            heading_profile = (chunk.target_element_style_slots or {}).get("heading") or rules.style_profile.get("heading_profiles", {}).get(str(chunk.level), {})
+            self.apply_paragraph_profile(heading, heading_profile, document, is_heading=True)
+            self.replace_paragraph_text(heading, chunk.template_title, document, profile=heading_profile)
             body = section.Body.AppendParagraph("")
-            self.replace_paragraph_text(body, f"[Placeholder for {chunk.template_title}]", document)
+            body_profile = (chunk.target_element_style_slots or {}).get("body_paragraph") or rules.style_profile.get("body_style", {})
+            self.apply_paragraph_profile(body, body_profile, document)
+            self.replace_paragraph_text(body, f"[Placeholder for {chunk.template_title}]", document, profile=body_profile)
             content_actions.append("create_placeholder_section")
         document.Save(str(output_path))
         return str(output_path), content_actions, dict(chunk.statistics)
@@ -540,7 +770,7 @@ class AsposeExecutionAgent:
                     profile = slot_map.get(slot_name) or rules.style_profile.get("body_style", {})
                     self.apply_paragraph_profile(node, profile, document, is_heading=(slot_name == "heading"))
                     if slot_name == "heading":
-                        self.replace_heading_text_with_template_runs(node, chunk.template_title, document)
+                        self.replace_heading_text_with_template_runs(node, chunk.template_title, document, profile=profile)
                     if slot_name == "reference_item":
                         self.normalize_reference_item_paragraph(node, rules.interpret)
                     self.fix_behind_text_shapes(node)
@@ -624,19 +854,102 @@ class TemplateRuleAgent:
     def __init__(self, executor: AsposeExecutionAgent) -> None:
         self.executor = executor
 
-    def run(self, template_docx_path: str) -> tuple[RuleBundle, dict[str, Any], list[OutlineItem]]:
-        outline_candidates = self.executor.extract_outline_candidates(template_docx_path)
-        provisional_outline = self.executor.extract_outline(template_docx_path)
-        confirmed_outline, mode, notes = self._confirm_template_outline(template_docx_path, outline_candidates, provisional_outline)
+    def run(self, template_docx_path: str, outline_mode: str = DEFAULT_OUTLINE_MODE) -> tuple[RuleBundle, dict[str, Any], list[OutlineItem]]:
+        resolution = self._resolve_outline(
+            docx_path=template_docx_path,
+            outline_mode=outline_mode,
+            document_kind="template",
+        )
+        confirmed_outline = list(resolution["outline"])
         structure = self.executor.extract_structure(template_docx_path, outline=confirmed_outline)
         style_profile = self.executor.extract_style_profile(template_docx_path, confirmed_outline)
         structure["style_profile"] = style_profile
         structure["reference_profile"] = style_profile.get("reference_profile", {})
         rules = build_rule_bundle(template_docx_path, confirmed_outline, structure, style_profile)
-        rules.outline_generation_mode = mode
-        rules.outline_candidates_summary = outline_candidates
-        rules.outline_confirmation_notes = notes
+        rules.outline_mode = str(resolution["requested_outline_mode"])
+        rules.effective_outline_mode = str(resolution["effective_outline_mode"])
+        rules.outline_generation_mode = str(resolution["outline_generation_mode"])
+        rules.outline_candidates_summary = list(resolution["outline_candidates"])
+        rules.outline_confirmation_notes = list(resolution["notes"])
+        rules.template_outline_generation = dict(resolution["record"])
         return rules, structure, confirmed_outline
+
+    def _resolve_outline(
+        self,
+        docx_path: str,
+        outline_mode: str,
+        document_kind: str,
+    ) -> dict[str, Any]:
+        requested_mode = normalize_outline_mode(outline_mode)
+        outline_candidates = self.executor.extract_outline_candidates(docx_path)
+        provisional_outline = self.executor.extract_outline(docx_path)
+        notes: list[str] = []
+        confirmed_outline = self._fallback_confirm_outline(outline_candidates, provisional_outline)
+        effective_mode = OUTLINE_MODE_ASPOSE_ONLY
+        generation_mode = "rules_only"
+        llm_attempted = False
+        llm_confirmed = False
+        fallback_used = requested_mode == OUTLINE_MODE_ASPOSE_ONLY
+
+        if requested_mode == OUTLINE_MODE_ASPOSE_ONLY:
+            notes.append("outline mode aspose_only selected; skipped llm confirmation")
+        else:
+            llm_attempted = True
+            confirm = getattr(self.executor, "confirm_outline_with_llm", None)
+            requested_effective_mode = OUTLINE_MODE_ASPOSE_PLUS_LLM if requested_mode == OUTLINE_MODE_LLM_ONLY else requested_mode
+            if requested_mode == OUTLINE_MODE_LLM_ONLY:
+                notes.append("outline mode llm_only is experimental; using Aspose candidates as the correction substrate")
+            if callable(confirm):
+                payload = confirm(docx_path, outline_candidates, provisional_outline)
+                llm_outline = self._outline_from_confirmation_payload(payload, provisional_outline)
+                if llm_outline:
+                    confirmed_outline = llm_outline
+                    llm_confirmed = True
+                    fallback_used = False
+                    effective_mode = requested_effective_mode
+                    generation_mode = "rules_plus_llm"
+                    notes.append("outline confirmed with llm")
+                else:
+                    notes.append(f"outline mode {requested_mode} fell back to Aspose rules because llm confirmation returned no usable outline")
+            else:
+                notes.append(f"outline mode {requested_mode} fell back to Aspose rules because llm confirmation is unavailable")
+
+        record = {
+            "document_kind": document_kind,
+            "requested_outline_mode": requested_mode,
+            "effective_outline_mode": effective_mode,
+            "outline_generation_mode": generation_mode,
+            "outline_candidate_count": len(outline_candidates),
+            "provisional_outline_count": len(provisional_outline),
+            "confirmed_outline_count": len(confirmed_outline),
+            "llm_attempted": llm_attempted,
+            "llm_confirmed": llm_confirmed,
+            "fallback_used": fallback_used,
+            "experimental_mode": requested_mode == OUTLINE_MODE_LLM_ONLY,
+            "notes": list(notes),
+            "outline": [item.to_dict() for item in confirmed_outline],
+        }
+        _diag_log(
+            "outline_resolution",
+            document_kind=document_kind,
+            requested_outline_mode=requested_mode,
+            effective_outline_mode=effective_mode,
+            outline_generation_mode=generation_mode,
+            llm_attempted=llm_attempted,
+            llm_confirmed=llm_confirmed,
+            fallback_used=fallback_used,
+            confirmed_outline_count=len(confirmed_outline),
+        )
+        return {
+            "outline": confirmed_outline,
+            "outline_candidates": outline_candidates,
+            "provisional_outline": provisional_outline,
+            "requested_outline_mode": requested_mode,
+            "effective_outline_mode": effective_mode,
+            "outline_generation_mode": generation_mode,
+            "notes": notes,
+            "record": record,
+        }
 
     def _confirm_template_outline(
         self,
@@ -700,16 +1013,24 @@ class TemplateRuleAgent:
 class FlowSchedulerAgent:
     def __init__(self, executor: AsposeExecutionAgent) -> None:
         self.executor = executor
+        self._outline_agent = TemplateRuleAgent(executor)
 
-    def run(self, source_docx_path: str, rule_bundle: RuleBundle, split_root: str) -> tuple[list[SectionChunk], dict[str, Any], dict[str, str]]:
-        source_outline = self.executor.extract_outline(source_docx_path)
+    def run(self, source_docx_path: str, rule_bundle: RuleBundle, split_root: str, outline_mode: str | None = None) -> tuple[list[SectionChunk], dict[str, Any], dict[str, str]]:
+        resolution = self._outline_agent._resolve_outline(
+            docx_path=source_docx_path,
+            outline_mode=outline_mode or rule_bundle.outline_mode,
+            document_kind="source",
+        )
+        source_outline = list(resolution["outline"])
         source_structure = self.executor.extract_structure(source_docx_path, outline=source_outline)
+        rule_bundle.source_outline_generation = dict(resolution["record"])
         target_outline, outline_mapping = self._build_target_outline(rule_bundle, source_outline)
         rule_bundle.target_outline = target_outline
         rule_bundle.mapping_rules = {
             **dict(rule_bundle.mapping_rules or {}),
             "target_outline_strategy": "template_backbone_plus_source_append",
             "source_to_target_outline_map": outline_mapping,
+            "source_outline_mode": dict(resolution["record"]),
         }
         self._ensure_target_section_styles(rule_bundle)
         split_map = self.executor.split_to_section_docs(source_docx_path, source_outline, split_root)

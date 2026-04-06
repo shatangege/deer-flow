@@ -70,6 +70,13 @@ make docker-logs-frontend
 make docker-logs-gateway
 ```
 
+If Docker builds are slow in your network, you can override the default package registries before running `make docker-init` or `make docker-start`:
+
+```bash
+export UV_INDEX_URL=https://pypi.org/simple
+export NPM_REGISTRY=https://registry.npmjs.org
+```
+
 #### Linux: Docker daemon permission denied
 
 If `make docker-init`, `make docker-start`, or `make docker-stop` fails on Linux with an error like below, your current user likely does not have permission to access the Docker daemon socket:
@@ -303,7 +310,7 @@ Every pull request runs the backend regression workflow at [.github/workflows/ba
 
 - [Configuration Guide](backend/docs/CONFIGURATION.md) - Setup and configuration
 - [Architecture Overview](backend/CLAUDE.md) - Technical architecture
-- [MCP Setup Guide](MCP_SETUP.md) - Model Context Protocol configuration
+- [MCP Setup Guide](backend/docs/MCP_SERVER.md) - Model Context Protocol configuration
 
 ## Need Help?
 

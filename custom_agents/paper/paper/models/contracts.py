@@ -55,9 +55,13 @@ class RuleBundle:
     style_profile: dict[str, Any]
     required_sections: list[str]
     target_outline: list[OutlineItem] = field(default_factory=list)
+    outline_mode: str = "aspose_plus_llm"
+    effective_outline_mode: str = "aspose_plus_llm"
     outline_generation_mode: str = "rules_only"
     outline_candidates_summary: list[dict[str, Any]] = field(default_factory=list)
     outline_confirmation_notes: list[str] = field(default_factory=list)
+    template_outline_generation: dict[str, Any] = field(default_factory=dict)
+    source_outline_generation: dict[str, Any] = field(default_factory=dict)
     template_structure_summary: dict[str, Any] = field(default_factory=dict)
     layout_profile: dict[str, Any] = field(default_factory=dict)
     section_styles: list[dict[str, Any]] = field(default_factory=list)
@@ -81,9 +85,13 @@ class RuleBundle:
             heading_levels=dict(payload.get("heading_levels", {})),
             style_profile=dict(payload.get("style_profile", {})),
             required_sections=list(payload.get("required_sections", [])),
+            outline_mode=str(payload.get("outline_mode", "aspose_plus_llm")),
+            effective_outline_mode=str(payload.get("effective_outline_mode", payload.get("outline_mode", "aspose_plus_llm"))),
             outline_generation_mode=str(payload.get("outline_generation_mode", "rules_only")),
             outline_candidates_summary=list(payload.get("outline_candidates_summary", [])),
             outline_confirmation_notes=list(payload.get("outline_confirmation_notes", [])),
+            template_outline_generation=dict(payload.get("template_outline_generation", {})),
+            source_outline_generation=dict(payload.get("source_outline_generation", {})),
             template_structure_summary=dict(payload.get("template_structure_summary", {})),
             layout_profile=dict(payload.get("layout_profile", {})),
             section_styles=list(payload.get("section_styles", [])),

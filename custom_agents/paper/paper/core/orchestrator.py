@@ -23,16 +23,18 @@ class PaperPipelineService:
         self.section_processor_agent = SectionProcessorAgent(self.executor)
         self.aggregation_review_agent = AggregationReviewAgent(self.executor)
 
-    def extract_template_rules(self, template_docx_path: str, output_json_path: str | None = None) -> RuleBundle:
-        rules, _, _ = self.template_rule_agent.run(template_docx_path)
+    def extract_template_rules(self, template_docx_path: str, output_json_path: str | None = None, outline_mode: str = "aspose_plus_llm") -> RuleBundle:
+        rules, _, _ = self.template_rule_agent.run(template_docx_path, outline_mode=outline_mode)
         if output_json_path:
             write_json(output_json_path, rules.to_dict())
         return rules
 
-    def split_sections(self, source_docx_path: str, rules: RuleBundle | str, output_json_path: str) -> list[SectionChunk]:
+    def split_sections(self, source_docx_path: str, rules: RuleBundle | str, output_json_path: str, outline_mode: str | None = None) -> list[SectionChunk]:
         loaded_rules = self._load_rules(rules)
         split_root = str(Path(output_json_path).expanduser().resolve().parent / "sections")
-        chunks, _, _ = self.flow_scheduler_agent.run(source_docx_path, loaded_rules, split_root)
+        chunks, _, _ = self.flow_scheduler_agent.run(source_docx_path, loaded_rules, split_root, outline_mode=outline_mode)
+        if isinstance(rules, str):
+            write_json(rules, loaded_rules.to_dict())
         write_json(output_json_path, {"sections": [chunk.to_dict() for chunk in chunks]})
         return chunks
 
@@ -70,6 +72,7 @@ class PaperPipelineService:
         template_docx_path: str,
         final_docx_path: str,
         report_json_path: str | None = None,
+        outline_mode: str = "aspose_plus_llm",
     ) -> dict[str, Any]:
         artifacts = build_pipeline_artifacts(source_docx_path, template_docx_path, final_docx_path)
         Path(artifacts.workspace).mkdir(parents=True, exist_ok=True)
@@ -80,8 +83,9 @@ class PaperPipelineService:
             template_docx_path=template_docx_path,
             artifacts=artifacts,
             report_json_path=effective_report_path,
+            outline_mode=outline_mode,
         )
-        return self._pipeline_result_payload(state["report"], len(state["results"]), artifacts.workspace, effective_report_path)
+        return self._pipeline_result_payload(state["report"], len(state["results"]), artifacts.workspace, effective_report_path, state["rules"])
 
     def run_pipeline_with_repair(
         self,
@@ -89,6 +93,7 @@ class PaperPipelineService:
         template_docx_path: str,
         final_docx_path: str,
         report_json_path: str | None = None,
+        outline_mode: str = "aspose_plus_llm",
     ) -> dict[str, Any]:
         artifacts = build_pipeline_artifacts(source_docx_path, template_docx_path, final_docx_path)
         Path(artifacts.workspace).mkdir(parents=True, exist_ok=True)
@@ -99,6 +104,7 @@ class PaperPipelineService:
             template_docx_path=template_docx_path,
             artifacts=artifacts,
             report_json_path=effective_report_path,
+            outline_mode=outline_mode,
         )
         initial_report: AggregateReport = state["report"]
         repair_executed = False
@@ -111,11 +117,12 @@ class PaperPipelineService:
                 report=initial_report,
                 state=state,
                 report_json_path=effective_report_path,
+                outline_mode=outline_mode,
             )
             repair_executed = repaired_scope != "none"
             if repair_executed:
                 state = self._load_pipeline_state_from_artifacts(artifacts, effective_report_path)
-        payload = self._pipeline_result_payload(state["report"], len(state["results"]), artifacts.workspace, effective_report_path)
+        payload = self._pipeline_result_payload(state["report"], len(state["results"]), artifacts.workspace, effective_report_path, state["rules"])
         payload.update(
             {
                 "repair_attempted": repair_executed,
@@ -130,8 +137,9 @@ class PaperPipelineService:
         section_count: int,
         artifacts_dir: str,
         report_json_path: str,
+        rules: RuleBundle | None = None,
     ) -> dict[str, Any]:
-        return {
+        payload = {
             "success": report.outline_pass,
             "final_docx_path": report.final_docx_path,
             "report_json_path": report_json_path,
@@ -147,6 +155,17 @@ class PaperPipelineService:
             "recommended_next_step": report.recommended_next_step,
             "repair_candidates": [item.to_dict() for item in report.repair_candidates],
         }
+        if rules is not None:
+            payload.update(
+                {
+                    "outline_mode": rules.outline_mode,
+                    "effective_outline_mode": rules.effective_outline_mode,
+                    "outline_generation_mode": rules.outline_generation_mode,
+                    "template_outline_generation": dict(rules.template_outline_generation or {}),
+                    "source_outline_generation": dict(rules.source_outline_generation or {}),
+                }
+            )
+        return payload
 
     def _run_pipeline_once(
         self,
@@ -155,22 +174,39 @@ class PaperPipelineService:
         template_docx_path: str,
         artifacts: PipelineArtifacts,
         report_json_path: str,
+        outline_mode: str,
     ) -> dict[str, Any]:
-        rules, _, _ = self.template_rule_agent.run(template_docx_path)
+        rules, _, _ = self.template_rule_agent.run(template_docx_path, outline_mode=outline_mode)
         write_json(artifacts.template_rules, rules.to_dict())
         write_json(
             artifacts.template_outline_candidates,
             {
+                "outline_mode": rules.outline_mode,
+                "effective_outline_mode": rules.effective_outline_mode,
                 "outline_generation_mode": rules.outline_generation_mode,
                 "outline_confirmation_notes": rules.outline_confirmation_notes,
+                "template_outline_generation": rules.template_outline_generation,
                 "outline_candidates": rules.outline_candidates_summary,
             },
         )
-        source_outline = self.executor.extract_outline(source_docx_path)
-        write_json(artifacts.source_outline, {"outline": [item.to_dict() for item in source_outline]})
-        source_structure = self.executor.extract_structure(source_docx_path, outline=source_outline)
+        chunks, source_structure, _ = self.flow_scheduler_agent.run(
+            source_docx_path,
+            rules,
+            str(Path(artifacts.workspace) / "sections"),
+            outline_mode=outline_mode,
+        )
+        write_json(artifacts.template_rules, rules.to_dict())
+        write_json(
+            artifacts.source_outline,
+            {
+                "outline_mode": rules.outline_mode,
+                "effective_outline_mode": (rules.source_outline_generation or {}).get("effective_outline_mode", rules.effective_outline_mode),
+                "outline_generation_mode": (rules.source_outline_generation or {}).get("outline_generation_mode", "rules_only"),
+                "source_outline_generation": rules.source_outline_generation,
+                "outline": list((rules.source_outline_generation or {}).get("outline", [])),
+            },
+        )
         write_json(artifacts.source_structure, source_structure)
-        chunks, _, _ = self.flow_scheduler_agent.run(source_docx_path, rules, str(Path(artifacts.workspace) / "sections"))
         write_json(artifacts.section_chunks, {"sections": [chunk.to_dict() for chunk in chunks]})
         results = self._process_chunks(chunks, rules, artifacts)
         report = self.aggregate_sections(results, rules, artifacts.final_docx, report_json_path)
@@ -199,11 +235,13 @@ class PaperPipelineService:
         report: AggregateReport,
         state: dict[str, Any],
         report_json_path: str,
+        outline_mode: str,
     ) -> str:
         recommended = report.recommended_next_step
         if recommended == "repair_mapping_then_reprocess_sections":
-            refreshed_rules = self.extract_template_rules(template_docx_path, artifacts.template_rules)
-            chunks, _, _ = self.flow_scheduler_agent.run(source_docx_path, refreshed_rules, str(Path(artifacts.workspace) / "sections"))
+            refreshed_rules = self.extract_template_rules(template_docx_path, artifacts.template_rules, outline_mode=outline_mode)
+            chunks, _, _ = self.flow_scheduler_agent.run(source_docx_path, refreshed_rules, str(Path(artifacts.workspace) / "sections"), outline_mode=outline_mode)
+            write_json(artifacts.template_rules, refreshed_rules.to_dict())
             write_json(artifacts.section_chunks, {"sections": [chunk.to_dict() for chunk in chunks]})
             results = self._process_chunks(chunks, refreshed_rules, artifacts)
             self.aggregate_sections(results, refreshed_rules, artifacts.final_docx, report_json_path)
@@ -235,9 +273,11 @@ class PaperPipelineService:
                 template_docx_path=template_docx_path,
                 artifacts=artifacts,
                 report_json_path=report_json_path,
+                outline_mode=outline_mode,
             )
             return "global"
         return "none"
+
 
     def _load_pipeline_state_from_artifacts(self, artifacts: PipelineArtifacts, report_json_path: str) -> dict[str, Any]:
         rules = self._load_rules(artifacts.template_rules)

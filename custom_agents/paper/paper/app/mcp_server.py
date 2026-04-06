@@ -3,7 +3,10 @@ from __future__ import annotations
 import json
 import os
 import sys
+import traceback
+from functools import wraps
 from pathlib import Path
+from time import perf_counter
 from typing import Any
 
 from mcp.server.fastmcp import FastMCP
@@ -49,18 +52,79 @@ def _low_level_service() -> PaperLowLevelMcpService:
     return PaperLowLevelMcpService()
 
 
+def _tool_log_context(arguments: dict[str, object]) -> dict[str, object]:
+    context: dict[str, object] = {}
+    for key, value in arguments.items():
+        if value is None:
+            continue
+        if key == "thread_id":
+            context[key] = value
+            continue
+        if isinstance(value, (str, int, float, bool)):
+            context[key] = value
+            continue
+        if isinstance(value, list):
+            context[f"{key}_count"] = len(value)
+            if value and all(isinstance(item, str) for item in value[:3]):
+                context[f"{key}_sample"] = value[:3]
+            continue
+        context[key] = type(value).__name__
+    return context
+
+
+def _logged_tool(tool_name: str):
+    def decorator(func):
+        @wraps(func)
+        def wrapper(*args, **kwargs):
+            started = perf_counter()
+            _log("tool_start", tool_name=tool_name, **_tool_log_context(kwargs))
+            try:
+                result = func(*args, **kwargs)
+                structured = result.get("structuredContent", {}) if isinstance(result, dict) else {}
+                _log(
+                    "tool_success",
+                    tool_name=tool_name,
+                    elapsed_ms=round((perf_counter() - started) * 1000, 1),
+                    success=structured.get("success"),
+                    is_error=result.get("isError") if isinstance(result, dict) else None,
+                    error=structured.get("error"),
+                )
+                return result
+            except Exception as exc:
+                _log(
+                    "tool_exception",
+                    tool_name=tool_name,
+                    elapsed_ms=round((perf_counter() - started) * 1000, 1),
+                    error_type=type(exc).__name__,
+                    error=str(exc),
+                    traceback=traceback.format_exc(limit=12),
+                )
+                raise
+
+        return wrapper
+
+    return decorator
+
+
 @app.tool(name="extract_paper_template_rules", description="Extract template outline and style rules for the paper pipeline.")
-def extract_paper_template_rules(template_docx_path: str, output_json_path: str, thread_id: str | None = None) -> dict[str, Any]:
+@_logged_tool("extract_paper_template_rules")
+def extract_paper_template_rules(
+    template_docx_path: str,
+    output_json_path: str,
+    outline_mode: str = "aspose_plus_llm",
+    thread_id: str | None = None,
+) -> dict[str, Any]:
     try:
         template_path = resolve_existing_file("template_docx_path", template_docx_path, thread_id)
         output_path = resolve_output_file(output_json_path, thread_id)
-        rules = _service().extract_template_rules(str(template_path), str(output_path))
+        rules = _service().extract_template_rules(str(template_path), str(output_path), outline_mode)
         return _result({"success": True, "rules_json_path": str(output_path), "rule_bundle": rules.to_dict()})
     except Exception as exc:
         return _result({"success": False, "error": str(exc)}, is_error=True)
 
 
 @app.tool(name="load_document", description="Load a paper document through Aspose and return lightweight metadata.")
+@_logged_tool("load_document")
 def load_document(docx_path: str, thread_id: str | None = None) -> dict[str, Any]:
     try:
         resolved_path = resolve_existing_file("docx_path", docx_path, thread_id)
@@ -71,6 +135,7 @@ def load_document(docx_path: str, thread_id: str | None = None) -> dict[str, Any
 
 
 @app.tool(name="extract_outline", description="Extract a document outline using the low-level Aspose execution layer.")
+@_logged_tool("extract_outline")
 def extract_outline(docx_path: str, output_json_path: str | None = None, thread_id: str | None = None) -> dict[str, Any]:
     try:
         resolved_path = resolve_existing_file("docx_path", docx_path, thread_id)
@@ -82,6 +147,7 @@ def extract_outline(docx_path: str, output_json_path: str | None = None, thread_
 
 
 @app.tool(name="extract_outline_candidates", description="Extract outline candidates using the low-level Aspose execution layer.")
+@_logged_tool("extract_outline_candidates")
 def extract_outline_candidates(docx_path: str, output_json_path: str | None = None, thread_id: str | None = None) -> dict[str, Any]:
     try:
         resolved_path = resolve_existing_file("docx_path", docx_path, thread_id)
@@ -93,6 +159,7 @@ def extract_outline_candidates(docx_path: str, output_json_path: str | None = No
 
 
 @app.tool(name="extract_structure", description="Extract a document structure payload using the low-level Aspose execution layer.")
+@_logged_tool("extract_structure")
 def extract_structure(
     docx_path: str,
     output_json_path: str | None = None,
@@ -114,6 +181,7 @@ def extract_structure(
 
 
 @app.tool(name="extract_style_profile", description="Extract a style profile using the low-level Aspose execution layer.")
+@_logged_tool("extract_style_profile")
 def extract_style_profile(
     docx_path: str,
     output_json_path: str | None = None,
@@ -135,6 +203,7 @@ def extract_style_profile(
 
 
 @app.tool(name="split_to_section_docs", description="Split a source paper into per-section documents using the low-level Aspose execution layer.")
+@_logged_tool("split_to_section_docs")
 def split_to_section_docs(
     source_docx_path: str,
     output_dir: str,
@@ -166,6 +235,7 @@ def split_to_section_docs(
 
 
 @app.tool(name="rewrite_section_content", description="Rewrite one section content payload using the low-level Aspose execution layer.")
+@_logged_tool("rewrite_section_content")
 def rewrite_section_content(
     section_chunk_json_path: str,
     rules_json_path: str,
@@ -190,6 +260,7 @@ def rewrite_section_content(
 
 
 @app.tool(name="apply_section_styles", description="Apply section styles using the low-level Aspose execution layer.")
+@_logged_tool("apply_section_styles")
 def apply_section_styles(
     input_docx_path: str,
     section_chunk_json_path: str,
@@ -217,6 +288,7 @@ def apply_section_styles(
 
 
 @app.tool(name="validate_section_layout", description="Validate section layout using the low-level Aspose execution layer.")
+@_logged_tool("validate_section_layout")
 def validate_section_layout(
     input_docx_path: str,
     section_chunk_json_path: str,
@@ -241,6 +313,7 @@ def validate_section_layout(
 
 
 @app.tool(name="merge_section_docs", description="Merge processed section documents using the low-level Aspose execution layer.")
+@_logged_tool("merge_section_docs")
 def merge_section_docs(
     ordered_section_docx_paths: list[str],
     output_docx_path: str,
@@ -265,6 +338,7 @@ def merge_section_docs(
 
 
 @app.tool(name="normalize_section_flow", description="Normalize section starts and pagination flow using the low-level Aspose execution layer.")
+@_logged_tool("normalize_section_flow")
 def normalize_section_flow(
     input_docx_path: str,
     output_docx_path: str,
@@ -286,6 +360,7 @@ def normalize_section_flow(
 
 
 @app.tool(name="validate_outline_alignment", description="Validate outline alignment against a rule bundle using the low-level Aspose execution layer.")
+@_logged_tool("validate_outline_alignment")
 def validate_outline_alignment(
     docx_path: str,
     rules_json_path: str,
@@ -307,18 +382,26 @@ def validate_outline_alignment(
 
 
 @app.tool(name="split_paper_sections", description="Split a source paper into template-aligned section chunks.")
-def split_paper_sections(source_docx_path: str, rules_json_path: str, output_json_path: str, thread_id: str | None = None) -> dict[str, Any]:
+@_logged_tool("split_paper_sections")
+def split_paper_sections(
+    source_docx_path: str,
+    rules_json_path: str,
+    output_json_path: str,
+    outline_mode: str | None = None,
+    thread_id: str | None = None,
+) -> dict[str, Any]:
     try:
         source_path = resolve_existing_file("source_docx_path", source_docx_path, thread_id)
         rules_path = resolve_existing_file("rules_json_path", rules_json_path, thread_id)
         output_path = resolve_output_file(output_json_path, thread_id)
-        sections = _service().split_sections(str(source_path), str(rules_path), str(output_path))
+        sections = _service().split_sections(str(source_path), str(rules_path), str(output_path), outline_mode)
         return _result({"success": True, "sections_json_path": str(output_path), "sections": [item.to_dict() for item in sections]})
     except Exception as exc:
         return _result({"success": False, "error": str(exc)}, is_error=True)
 
 
 @app.tool(name="process_paper_section", description="Process one paper section with content organization, minimal completion, styling, and section-level review.")
+@_logged_tool("process_paper_section")
 def process_paper_section(
     section_chunk_json_path: str,
     rules_json_path: str,
@@ -338,6 +421,7 @@ def process_paper_section(
 
 
 @app.tool(name="aggregate_paper_sections", description="Aggregate processed paper sections into the final template-aligned paper.")
+@_logged_tool("aggregate_paper_sections")
 def aggregate_paper_sections(
     section_results_json_path: str,
     rules_json_path: str,
@@ -362,11 +446,13 @@ def aggregate_paper_sections(
 
 
 @app.tool(name="run_paper_pipeline", description="Run the full paper pipeline from source docx + template docx to final formatted paper.")
+@_logged_tool("run_paper_pipeline")
 def run_paper_pipeline(
     source_docx_path: str,
     template_docx_path: str,
     final_docx_path: str,
     report_json_path: str | None = None,
+    outline_mode: str = "aspose_plus_llm",
     thread_id: str | None = None,
 ) -> dict[str, Any]:
     try:
@@ -379,6 +465,7 @@ def run_paper_pipeline(
             str(template_path),
             str(final_path),
             str(report_path) if report_path else None,
+            outline_mode,
         )
         return _result(result, is_error=not result.get("success", False))
     except Exception as exc:
@@ -386,11 +473,13 @@ def run_paper_pipeline(
 
 
 @app.tool(name="run_paper_pipeline_with_repair", description="Run the full paper pipeline and execute one automatic repair cycle based on the aggregate review.")
+@_logged_tool("run_paper_pipeline_with_repair")
 def run_paper_pipeline_with_repair(
     source_docx_path: str,
     template_docx_path: str,
     final_docx_path: str,
     report_json_path: str | None = None,
+    outline_mode: str = "aspose_plus_llm",
     thread_id: str | None = None,
 ) -> dict[str, Any]:
     try:
@@ -403,6 +492,7 @@ def run_paper_pipeline_with_repair(
             str(template_path),
             str(final_path),
             str(report_path) if report_path else None,
+            outline_mode,
         )
         return _result(result, is_error=not result.get("success", False))
     except Exception as exc:

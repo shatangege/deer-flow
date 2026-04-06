@@ -195,6 +195,10 @@ def ensure_table_spacing(_executor, table, table_profile):
 def apply_table_profile(executor, table, profile, document):
     if not profile:
         return
+    try:
+        table.ClearBorders()
+    except Exception:
+        pass
     style_name = profile.get("style_name")
     if style_name:
         try:
@@ -214,6 +218,7 @@ def apply_table_profile(executor, table, profile, document):
     if header_row_profile and table.Rows.Count > 0:
         apply_table_row_profile(executor, table.Rows[0], header_row_profile, document, force_heading_format=True)
     body_row_profile = profile.get("body_row_profile")
-    if body_row_profile and table.Rows.Count > 1:
-        for row_idx in range(1, table.Rows.Count):
+    if body_row_profile and table.Rows.Count > 0:
+        start_idx = 1 if table.Rows.Count > 1 else 0
+        for row_idx in range(start_idx, table.Rows.Count):
             apply_table_row_profile(executor, table.Rows[row_idx], body_row_profile, document)

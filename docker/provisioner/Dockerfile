@@ -1,6 +1,7 @@
 FROM python:3.12-slim-bookworm
 
 ARG APT_MIRROR
+ARG PIP_INDEX_URL
 
 RUN if [ -n "${APT_MIRROR}" ]; then \
       find /etc/apt -type f \( -name "*.list" -o -name "*.sources" \) -exec sed -i \
@@ -17,6 +18,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 
 # Install Python dependencies
 RUN pip install --no-cache-dir \
+    ${PIP_INDEX_URL:+--index-url "$PIP_INDEX_URL"} \
     fastapi \
     "uvicorn[standard]" \
     kubernetes

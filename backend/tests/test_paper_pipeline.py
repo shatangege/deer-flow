@@ -11,12 +11,14 @@ if str(PAPER_PACKAGE_ROOT) not in sys.path:
     sys.path.insert(0, str(PAPER_PACKAGE_ROOT))
 
 from paper.core.orchestrator import PaperPipelineService
+from paper.core.execution import AsposeExecutionAgent
 from paper.models.contracts import OutlineItem
 
 
 class FakeExecutor:
     def __init__(self, tmp_path: Path) -> None:
         self.tmp_path = tmp_path
+        self.llm_call_count = 0
 
     def extract_outline_candidates(self, docx_path: str):
         name = Path(docx_path).name
@@ -259,9 +261,14 @@ def test_extract_template_rules_records_outline_generation_metadata(tmp_path: Pa
 
     rules = service.extract_template_rules(str(template))
 
+    assert rules.outline_mode == "aspose_plus_llm"
+    assert rules.effective_outline_mode == "aspose_only"
     assert rules.outline_generation_mode == "rules_only"
     assert rules.outline_confirmation_notes
     assert len(rules.outline_candidates_summary) == 2
+    assert rules.template_outline_generation["document_kind"] == "template"
+    assert rules.template_outline_generation["requested_outline_mode"] == "aspose_plus_llm"
+    assert rules.template_outline_generation["effective_outline_mode"] == "aspose_only"
     assert [item.title for item in rules.target_outline] == ["Introduction", "Methods"]
     assert "introduction" in rules.section_element_style_map
     assert "heading" in rules.section_element_style_map["introduction"]["element_styles"]
@@ -270,6 +277,7 @@ def test_extract_template_rules_records_outline_generation_metadata(tmp_path: Pa
 def test_extract_template_rules_uses_llm_confirmation_when_available(tmp_path: Path):
     class LlmExecutor(FakeExecutor):
         def confirm_outline_with_llm(self, template_docx_path: str, outline_candidates, provisional_outline):
+            self.llm_call_count += 1
             return {
                 "confirmed_outline": [
                     {
@@ -287,8 +295,131 @@ def test_extract_template_rules_uses_llm_confirmation_when_available(tmp_path: P
 
     rules = service.extract_template_rules(str(template))
 
+    assert service.executor.llm_call_count == 1
+    assert rules.outline_mode == "aspose_plus_llm"
+    assert rules.effective_outline_mode == "aspose_plus_llm"
     assert rules.outline_generation_mode == "rules_plus_llm"
     assert [item.title for item in rules.template_outline] == ["Methods"]
+
+
+def test_extract_template_rules_aspose_only_skips_llm_confirmation(tmp_path: Path):
+    class TrackingExecutor(FakeExecutor):
+        def confirm_outline_with_llm(self, template_docx_path: str, outline_candidates, provisional_outline):
+            self.llm_call_count += 1
+            return {
+                "confirmed_outline": [
+                    {
+                        "id": "h2",
+                        "title": "Methods",
+                        "level": 1,
+                        "source_paragraph_index": 3,
+                    }
+                ]
+            }
+
+    service = PaperPipelineService(executor=TrackingExecutor(tmp_path))
+    template = tmp_path / "template.docx"
+    template.write_text("template", encoding="utf-8")
+
+    rules = service.extract_template_rules(str(template), outline_mode="aspose_only")
+
+    assert service.executor.llm_call_count == 0
+    assert rules.outline_mode == "aspose_only"
+    assert rules.effective_outline_mode == "aspose_only"
+    assert rules.outline_generation_mode == "rules_only"
+    assert rules.template_outline_generation["llm_attempted"] is False
+
+
+def test_extract_template_rules_llm_only_records_experimental_downgrade(tmp_path: Path):
+    class ExperimentalExecutor(FakeExecutor):
+        def confirm_outline_with_llm(self, template_docx_path: str, outline_candidates, provisional_outline):
+            self.llm_call_count += 1
+            return {
+                "confirmed_outline": [
+                    {
+                        "id": "h1",
+                        "title": "Introduction",
+                        "level": 1,
+                        "source_paragraph_index": 0,
+                    }
+                ]
+            }
+
+    service = PaperPipelineService(executor=ExperimentalExecutor(tmp_path))
+    template = tmp_path / "template.docx"
+    template.write_text("template", encoding="utf-8")
+
+    rules = service.extract_template_rules(str(template), outline_mode="llm_only")
+
+    assert service.executor.llm_call_count == 1
+    assert rules.outline_mode == "llm_only"
+    assert rules.effective_outline_mode == "aspose_plus_llm"
+    assert rules.template_outline_generation["experimental_mode"] is True
+    assert any("experimental" in note for note in rules.outline_confirmation_notes)
+
+
+def test_confirm_outline_with_llm_parses_model_response(monkeypatch):
+    executor = object.__new__(AsposeExecutionAgent)
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-test")
+    monkeypatch.setenv("PAPER_OUTLINE_LLM_MODEL", "test-model")
+    monkeypatch.delenv("PAPER_OUTLINE_LLM_BASE_URL", raising=False)
+
+    class _FakeResponse:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, tb):
+            return False
+
+        def read(self):
+            return json.dumps(
+                {
+                    "choices": [
+                        {
+                            "message": {
+                                "content": json.dumps(
+                                    {
+                                        "confirmed_outline": [
+                                            {
+                                                "id": "h1",
+                                                "title": "Introduction",
+                                                "level": 1,
+                                                "source_paragraph_index": 0,
+                                            }
+                                        ]
+                                    }
+                                )
+                            }
+                        }
+                    ]
+                }
+            ).encode("utf-8")
+
+    monkeypatch.setattr("paper.core.execution.urllib.request.urlopen", lambda request, timeout=60: _FakeResponse())
+
+    payload = executor.confirm_outline_with_llm(
+        "template.docx",
+        [{"id": "h1", "title": "Introduction", "candidate_level": 1, "source_paragraph_index": 0}],
+        [OutlineItem(id="h1", title="Introduction", normalized_title="introduction", level=1, order=1, source_paragraph_index=0)],
+    )
+
+    assert payload is not None
+    assert payload["confirmed_outline"][0]["title"] == "Introduction"
+
+
+def test_confirm_outline_with_llm_returns_none_when_unconfigured(monkeypatch):
+    executor = object.__new__(AsposeExecutionAgent)
+    monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+    monkeypatch.delenv("PAPER_OUTLINE_LLM_API_KEY", raising=False)
+    monkeypatch.delenv("PAPER_OUTLINE_LLM_MODEL", raising=False)
+
+    payload = executor.confirm_outline_with_llm(
+        "template.docx",
+        [{"id": "h1", "title": "Introduction", "candidate_level": 1}],
+        [OutlineItem(id="h1", title="Introduction", normalized_title="introduction", level=1, order=1)],
+    )
+
+    assert payload is None
 
 
 def test_flow_scheduler_builds_target_outline_with_source_only_sections(tmp_path: Path):
@@ -351,6 +482,7 @@ def test_flow_scheduler_builds_target_outline_with_source_only_sections(tmp_path
     chunks = service.split_sections(str(source), rules, str(tmp_path / "sections-extra.json"))
 
     assert [item.title for item in rules.target_outline] == ["Introduction", "Methods", "Discussion"]
+    assert rules.source_outline_generation["document_kind"] == "source"
     assert rules.mapping_rules["target_outline_strategy"] == "template_backbone_plus_source_append"
     mapping = rules.mapping_rules["source_to_target_outline_map"]
     assert any(item["match_kind"] == "exact_title_match" and item["source_title"] == "Introduction" for item in mapping)
@@ -423,3 +555,34 @@ def test_flow_scheduler_uses_conservative_alias_mapping_for_standard_sections(tm
     assert not any(chunk.template_title == "Bibliography" for chunk in chunks)
     references_chunk = next(chunk for chunk in chunks if chunk.template_title == "References")
     assert references_chunk.source_mapping_kind == "conservative_alias_match"
+
+
+def test_run_pipeline_records_outline_mode_metadata(tmp_path: Path):
+    class LlmExecutor(FakeExecutor):
+        def confirm_outline_with_llm(self, template_docx_path: str, outline_candidates, provisional_outline):
+            self.llm_call_count += 1
+            return {
+                "confirmed_outline": [
+                    {
+                        "id": "h1",
+                        "title": "Introduction",
+                        "level": 1,
+                        "source_paragraph_index": 0,
+                    }
+                ]
+            }
+
+    service = PaperPipelineService(executor=LlmExecutor(tmp_path))
+    source = tmp_path / "source.docx"
+    template = tmp_path / "template.docx"
+    final = tmp_path / "final-outline-mode.docx"
+    report = tmp_path / "report-outline-mode.json"
+    source.write_text("source", encoding="utf-8")
+    template.write_text("template", encoding="utf-8")
+
+    result = service.run_pipeline(str(source), str(template), str(final), str(report), outline_mode="llm_only")
+
+    assert result["outline_mode"] == "llm_only"
+    assert result["effective_outline_mode"] in {"aspose_plus_llm", "aspose_only"}
+    assert result["template_outline_generation"]["requested_outline_mode"] == "llm_only"
+    assert result["source_outline_generation"]["document_kind"] == "source"
